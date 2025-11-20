@@ -1,0 +1,285 @@
+// Prisma Schema for Koordi
+// Database: PostgreSQL 15+
+// ORM: Prisma 5+
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// USER ENTITY
+// ============================================================================
+// Represents parent/caregiver accounts who manage children and events
+
+model User {
+  id                          String   @id @default(uuid()) @db.Uuid
+  email                       String   @unique @db.VarChar(255)
+  name                        String   @db.VarChar(100)
+  avatar_url                  String?  @db.Text
+  google_refresh_token_enc    String?  @db.Text // Encrypted refresh token
+  google_calendar_id          String?  @db.VarChar(255) // Primary calendar ID
+  google_calendar_sync_enabled Boolean  @default(false)
+  home_address                String?  @db.Text
+  home_lat                    Decimal? @db.Decimal(10, 8)
+  home_lng                    Decimal? @db.Decimal(11, 8)
+  comfort_buffer_minutes      Int      @default(5) // 0-60 minutes
+  supplemental_retention      Boolean  @default(false) // Keep drive times on reassignment
+  created_at                  DateTime @default(now()) @db.Timestamptz(6)
+  updated_at                  DateTime @updatedAt @db.Timestamptz(6)
+
+  // Relationships
+  owned_event_calendars       EventCalendar[]            @relation("CalendarOwner")
+  event_calendar_memberships  EventCalendarMembership[]
+  assigned_events             Event[]                    @relation("AssignedToUser")
+  sent_invitations            EventCalendarMembership[]  @relation("InvitationSender")
+
+  @@index([email])
+  @@map("users")
+}
+
+// ============================================================================
+// CHILD ENTITY
+// ============================================================================
+// Represents child profiles associated with Event Calendars
+
+model Child {
+  id             String   @id @default(uuid()) @db.Uuid
+  name           String   @db.VarChar(50)
+  photo_url      String?  @db.Text
+  date_of_birth  DateTime? @db.Date
+  created_at     DateTime @default(now()) @db.Timestamptz(6)
+  updated_at     DateTime @updatedAt @db.Timestamptz(6)
+
+  // Relationships
+  event_calendars EventCalendar[]
+
+  @@map("children")
+}
+
+// ============================================================================
+// EVENT CALENDAR ENTITY
+// ============================================================================
+// Represents ICS feed sources tied to one child
+
+model EventCalendar {
+  id                String   @id @default(uuid()) @db.Uuid
+  name              String   @db.VarChar(100)
+  ics_url           String   @db.Text
+  child_id          String   @db.Uuid
+  owner_id          String   @db.Uuid
+  color             String   @default("#3B82F6") @db.VarChar(7) // Hex color
+  sync_enabled      Boolean  @default(true)
+  last_sync_at      DateTime? @db.Timestamptz(6)
+  last_sync_status  String   @default("pending") @db.VarChar(20) // pending, success, error
+  last_sync_error   String?  @db.Text
+  google_calendar_watch_token  String? @db.Text // Watch API token
+  google_calendar_watch_expiry DateTime? @db.Timestamptz(6)
+  created_at        DateTime @default(now()) @db.Timestamptz(6)
+  updated_at        DateTime @updatedAt @db.Timestamptz(6)
+
+  // Relationships
+  child             Child    @relation(fields: [child_id], references: [id], onDelete: Cascade)
+  owner             User     @relation("CalendarOwner", fields: [owner_id], references: [id], onDelete: Cascade)
+  members           EventCalendarMembership[]
+  events            Event[]
+
+  @@index([child_id])
+  @@index([owner_id])
+  @@index([ics_url])
+  @@index([last_sync_at])
+  @@map("event_calendars")
+}
+
+// ============================================================================
+// EVENT CALENDAR MEMBERSHIP ENTITY
+// ============================================================================
+// Junction table managing parent access to Event Calendars (invitation system)
+
+model EventCalendarMembership {
+  id                  String   @id @default(uuid()) @db.Uuid
+  event_calendar_id   String   @db.Uuid
+  user_id             String?  @db.Uuid // Null until invitation accepted
+  invited_email       String   @db.VarChar(255)
+  invitation_token    String   @unique @db.VarChar(255)
+  status              String   @default("pending") @db.VarChar(20) // pending, accepted, declined
+  invited_by_user_id  String   @db.Uuid
+  invited_at          DateTime @default(now()) @db.Timestamptz(6)
+  responded_at        DateTime? @db.Timestamptz(6)
+  created_at          DateTime @default(now()) @db.Timestamptz(6)
+  updated_at          DateTime @updatedAt @db.Timestamptz(6)
+
+  // Relationships
+  event_calendar      EventCalendar @relation(fields: [event_calendar_id], references: [id], onDelete: Cascade)
+  user                User?         @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  invited_by          User          @relation("InvitationSender", fields: [invited_by_user_id], references: [id], onDelete: Cascade)
+
+  @@unique([event_calendar_id, user_id]) // Prevent duplicate memberships
+  @@index([event_calendar_id])
+  @@index([user_id])
+  @@index([invited_email])
+  @@index([invitation_token])
+  @@index([status])
+  @@map("event_calendar_memberships")
+}
+
+// ============================================================================
+// EVENT ENTITY
+// ============================================================================
+// Main events imported from ICS feeds
+
+model Event {
+  id                    String    @id @default(uuid()) @db.Uuid
+  event_calendar_id     String    @db.Uuid
+  ics_uid               String    @db.VarChar(255) // Original ICS UID for idempotency
+  title                 String    @db.VarChar(255)
+  description           String?   @db.Text
+  location              String?   @db.Text
+  location_lat          Decimal?  @db.Decimal(10, 8)
+  location_lng          Decimal?  @db.Decimal(11, 8)
+  start_time            DateTime  @db.Timestamptz(6)
+  end_time              DateTime  @db.Timestamptz(6)
+  is_all_day            Boolean   @default(false)
+  assigned_to_user_id   String?   @db.Uuid
+  google_event_id       String?   @db.VarChar(255) // Google Calendar event ID
+  last_modified         DateTime  @default(now()) @db.Timestamptz(6) // From ICS or update timestamp
+  created_at            DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime  @updatedAt @db.Timestamptz(6)
+
+  // Relationships
+  event_calendar        EventCalendar @relation(fields: [event_calendar_id], references: [id], onDelete: Cascade)
+  assigned_to           User?         @relation("AssignedToUser", fields: [assigned_to_user_id], references: [id], onDelete: SetNull)
+  supplemental_events   SupplementalEvent[]
+
+  @@unique([event_calendar_id, ics_uid]) // Prevent duplicate imports
+  @@index([event_calendar_id])
+  @@index([assigned_to_user_id])
+  @@index([start_time])
+  @@index([end_time])
+  @@index([google_event_id])
+  @@map("events")
+}
+
+// ============================================================================
+// SUPPLEMENTAL EVENT ENTITY
+// ============================================================================
+// System-generated drive time events (departure/return trips)
+
+model SupplementalEvent {
+  id                    String    @id @default(uuid()) @db.Uuid
+  parent_event_id       String    @db.Uuid
+  type                  String    @db.VarChar(20) // 'departure' or 'return'
+  title                 String    @db.VarChar(255)
+  start_time            DateTime  @db.Timestamptz(6)
+  end_time              DateTime  @db.Timestamptz(6)
+  origin_address        String    @db.Text
+  origin_lat            Decimal   @db.Decimal(10, 8)
+  origin_lng            Decimal   @db.Decimal(11, 8)
+  destination_address   String    @db.Text
+  destination_lat       Decimal   @db.Decimal(10, 8)
+  destination_lng       Decimal   @db.Decimal(11, 8)
+  drive_time_minutes    Int       // Raw drive time from Google Maps
+  google_event_id       String?   @db.VarChar(255) // Google Calendar event ID
+  last_traffic_check    DateTime? @db.Timestamptz(6)
+  created_at            DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime  @updatedAt @db.Timestamptz(6)
+
+  // Relationships
+  parent_event          Event     @relation(fields: [parent_event_id], references: [id], onDelete: Cascade)
+
+  @@index([parent_event_id])
+  @@index([type])
+  @@index([start_time])
+  @@index([google_event_id])
+  @@map("supplemental_events")
+}
+
+// ============================================================================
+// ENUMS (Documented for reference - Prisma doesn't require explicit enums for strings)
+// ============================================================================
+
+// EventCalendarMembership.status: 'pending' | 'accepted' | 'declined'
+// EventCalendar.last_sync_status: 'pending' | 'success' | 'error'
+// SupplementalEvent.type: 'departure' | 'return'
+
+// ============================================================================
+// INDEXES SUMMARY
+// ============================================================================
+
+// User:
+// - email (unique + indexed for login queries)
+
+// Child:
+// - No additional indexes (simple lookups by ID)
+
+// EventCalendar:
+// - child_id (frequent joins)
+// - owner_id (ownership queries)
+// - ics_url (sync job lookups)
+// - last_sync_at (sync scheduling)
+
+// EventCalendarMembership:
+// - event_calendar_id (membership lookups)
+// - user_id (user's calendars queries)
+// - invited_email (invitation lookups)
+// - invitation_token (unique token validation)
+// - status (pending invitations queries)
+
+// Event:
+// - event_calendar_id + ics_uid (unique constraint for idempotency)
+// - event_calendar_id (calendar's events)
+// - assigned_to_user_id (user's assigned events)
+// - start_time, end_time (date range queries for dashboard)
+// - google_event_id (Google Calendar sync)
+
+// SupplementalEvent:
+// - parent_event_id (cascade deletions)
+// - type (departure/return filtering)
+// - start_time (dashboard queries)
+// - google_event_id (Google Calendar sync)
+
+// ============================================================================
+// CASCADE RULES
+// ============================================================================
+
+// User deleted → Cascade:
+// - owned_event_calendars (owner_id)
+// - event_calendar_memberships (user_id)
+// - assigned_events → SetNull (assigned_to_user_id)
+
+// Child deleted → Cascade:
+// - event_calendars (child_id)
+
+// EventCalendar deleted → Cascade:
+// - members (event_calendar_id)
+// - events (event_calendar_id)
+
+// Event deleted → Cascade:
+// - supplemental_events (parent_event_id)
+
+// ============================================================================
+// MIGRATIONS STRATEGY
+// ============================================================================
+
+// 1. Initial migration creates all tables with indexes
+// 2. Future migrations use Prisma Migrate:
+//    - `npx prisma migrate dev --name <description>` for development
+//    - `npx prisma migrate deploy` for production
+// 3. Seed data for development in prisma/seed.ts
+// 4. Always review generated SQL before applying to production
+
+// ============================================================================
+// NOTES
+// ============================================================================
+
+// - All timestamps use timestamptz(6) for timezone awareness
+// - UUIDs used for all primary keys for security and distribution
+// - Encrypted fields (google_refresh_token_enc) stored as TEXT
+// - Geographic coordinates use Decimal(10,8) and Decimal(11,8) for precision
+// - Color codes stored as VARCHAR(7) for hex format (#RRGGBB)
+// - Foreign keys with onDelete: Cascade for data integrity
+// - Unique constraints prevent duplicate data (email, invitation tokens, ICS UIDs)
