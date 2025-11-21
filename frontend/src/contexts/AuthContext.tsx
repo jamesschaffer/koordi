@@ -6,6 +6,7 @@ interface User {
   email: string;
   name: string;
   avatar_url?: string;
+  home_address?: string;
 }
 
 interface AuthContextType {

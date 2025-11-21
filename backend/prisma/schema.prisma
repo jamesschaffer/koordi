@@ -172,7 +172,7 @@ model Event {
 model SupplementalEvent {
   id                    String    @id @default(uuid()) @db.Uuid
   parent_event_id       String    @db.Uuid
-  type                  String    @db.VarChar(20) // 'departure' or 'return'
+  type                  String    @db.VarChar(20) // 'departure', 'buffer', or 'return'
   title                 String    @db.VarChar(255)
   start_time            DateTime  @db.Timestamptz(6)
   end_time              DateTime  @db.Timestamptz(6)
@@ -182,7 +182,7 @@ model SupplementalEvent {
   destination_address   String    @db.Text
   destination_lat       Decimal   @db.Decimal(10, 8)
   destination_lng       Decimal   @db.Decimal(11, 8)
-  drive_time_minutes    Int       // Raw drive time from Google Maps
+  drive_time_minutes    Int       // Raw drive time from Google Maps (0 for buffer events)
   google_event_id       String?   @db.VarChar(255) // Google Calendar event ID
   last_traffic_check    DateTime? @db.Timestamptz(6)
   created_at            DateTime  @default(now()) @db.Timestamptz(6)
@@ -204,7 +204,7 @@ model SupplementalEvent {
 
 // EventCalendarMembership.status: 'pending' | 'accepted' | 'declined'
 // EventCalendar.last_sync_status: 'pending' | 'success' | 'error'
-// SupplementalEvent.type: 'departure' | 'return'
+// SupplementalEvent.type: 'departure' | 'buffer' | 'return'
 
 // ============================================================================
 // INDEXES SUMMARY

@@ -1,9 +1,18 @@
-import { Outlet, Link, useLocation } from 'react-router-dom';
+import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { useEffect } from 'react';
 
 function Layout() {
-  const { user, logout } = useAuth();
+  const { user, logout, loading } = useAuth();
   const location = useLocation();
+  const navigate = useNavigate();
+
+  // Redirect to setup if user doesn't have home address
+  useEffect(() => {
+    if (!loading && user && !user.home_address) {
+      navigate('/setup');
+    }
+  }, [user, loading, navigate]);
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -47,7 +56,7 @@ function Layout() {
                       : 'text-gray-700 hover:bg-gray-100'
                   }`}
                 >
-                  Children
+                  Family
                 </Link>
                 <Link
                   to="/settings"

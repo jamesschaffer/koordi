@@ -8,6 +8,7 @@ import eventCalendarRoutes from './routes/eventCalendar';
 import childRoutes from './routes/child';
 import eventRoutes from './routes/event';
 import jobRoutes from './routes/jobs';
+import invitationRoutes from './routes/invitations';
 import './workers/icsSync.worker'; // Initialize worker
 import { initializeScheduler } from './jobs/scheduler';
 
@@ -50,6 +51,7 @@ app.use('/api/calendars', eventCalendarRoutes);
 app.use('/api/children', childRoutes);
 app.use('/api/events', eventRoutes);
 app.use('/api/jobs', jobRoutes);
+app.use('/api', invitationRoutes);
 
 // Start server
 app.listen(PORT, () => {

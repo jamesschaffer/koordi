@@ -1,17 +1,23 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { getEvents } from '../lib/api-events';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { getEvents, assignEvent, checkEventConflicts } from '../lib/api-events';
 import { getCalendars } from '../lib/api-calendars';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { Calendar, MapPin, User } from 'lucide-react';
+import { Calendar, MapPin, User, AlertTriangle } from 'lucide-react';
+import { Input } from '@/components/ui/input';
+import { useToast } from '@/hooks/use-toast';
 
 function Dashboard() {
   const token = localStorage.getItem('auth_token') || '';
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
   const [filter, setFilter] = useState<'all' | 'unassigned' | 'mine'>('all');
   const [selectedCalendar, setSelectedCalendar] = useState<string>('all');
+  const [startDate, setStartDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [endDate, setEndDate] = useState<string>('');
 
   // Fetch calendars for filter dropdown
   const { data: calendars } = useQuery({
@@ -21,14 +27,64 @@ function Dashboard() {
 
   // Fetch events based on filters
   const { data: events, isLoading } = useQuery({
-    queryKey: ['events', filter, selectedCalendar],
+    queryKey: ['events', filter, selectedCalendar, startDate, endDate],
     queryFn: () =>
       getEvents(token, {
         calendar_id: selectedCalendar === 'all' ? undefined : selectedCalendar,
         unassigned: filter === 'unassigned',
         assigned_to_me: filter === 'mine',
+        start_date: startDate || undefined,
+        end_date: endDate || undefined,
       }),
   });
+
+  // Assignment mutation
+  const assignMutation = useMutation({
+    mutationFn: ({ eventId, userId }: { eventId: string; userId: string | null }) =>
+      assignEvent(eventId, userId, token),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['events'] });
+      toast({
+        title: 'Success',
+        description: 'Event assignment updated',
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: 'Error',
+        description: error.response?.data?.error || 'Failed to assign event',
+        variant: 'destructive',
+      });
+    },
+  });
+
+  // Handle assignment with conflict check
+  const handleAssign = async (eventId: string, userId: string | null) => {
+    if (userId) {
+      try {
+        const { hasConflicts, conflicts } = await checkEventConflicts(eventId, userId, token);
+        if (hasConflicts) {
+          const confirmAssign = window.confirm(
+            `Warning: This assignment will create ${conflicts.length} scheduling conflict(s). Continue anyway?`
+          );
+          if (!confirmAssign) return;
+        }
+      } catch (error) {
+        console.error('Failed to check conflicts:', error);
+      }
+    }
+    assignMutation.mutate({ eventId, userId });
+  };
+
+  // Get unique members from all calendars
+  const allMembers = calendars?.reduce((acc, cal) => {
+    cal.members.forEach((member) => {
+      if (!acc.find((m) => m.id === member.user.id)) {
+        acc.push(member.user);
+      }
+    });
+    return acc;
+  }, [] as Array<{ id: string; name: string; email: string }>);
 
   const formatDateTime = (dateString: string, isAllDay: boolean) => {
     const date = new Date(dateString);
@@ -68,7 +124,7 @@ function Dashboard() {
       {/* Filters */}
       <Card>
         <CardContent className="pt-6">
-          <div className="flex gap-4 flex-wrap items-center">
+          <div className="space-y-4">
             {/* Filter tabs */}
             <div className="flex gap-2">
               <Button
@@ -91,20 +147,57 @@ function Dashboard() {
               </Button>
             </div>
 
-            {/* Calendar filter */}
-            <Select value={selectedCalendar} onValueChange={setSelectedCalendar}>
-              <SelectTrigger className="w-64">
-                <SelectValue placeholder="All Calendars" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Calendars</SelectItem>
-                {calendars?.map((calendar) => (
-                  <SelectItem key={calendar.id} value={calendar.id}>
-                    {calendar.name} ({calendar.child.name})
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            {/* Additional filters */}
+            <div className="flex gap-4 flex-wrap items-center">
+              {/* Calendar filter */}
+              <div className="flex-1 min-w-[200px]">
+                <Select value={selectedCalendar} onValueChange={setSelectedCalendar}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="All Calendars" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Calendars</SelectItem>
+                    {calendars?.map((calendar) => (
+                      <SelectItem key={calendar.id} value={calendar.id}>
+                        {calendar.name} ({calendar.child.name})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Date range filters */}
+              <div className="flex gap-2 items-center">
+                <label className="text-sm font-medium">From:</label>
+                <Input
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => setStartDate(e.target.value)}
+                  className="w-40"
+                />
+              </div>
+              <div className="flex gap-2 items-center">
+                <label className="text-sm font-medium">To:</label>
+                <Input
+                  type="date"
+                  value={endDate}
+                  onChange={(e) => setEndDate(e.target.value)}
+                  className="w-40"
+                />
+              </div>
+              {(startDate || endDate) && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setStartDate(new Date().toISOString().split('T')[0]);
+                    setEndDate('');
+                  }}
+                >
+                  Clear Dates
+                </Button>
+              )}
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -170,16 +263,46 @@ function Dashboard() {
                     </div>
                   </div>
 
-                  {/* Assignment Status */}
-                  <div className="ml-4">
-                    {event.assigned_to ? (
-                      <Badge variant="secondary" className="gap-1">
-                        <User className="w-3 h-3" />
-                        {event.assigned_to.name}
-                      </Badge>
-                    ) : (
-                      <Badge variant="outline">Unassigned</Badge>
-                    )}
+                  {/* Assignment Controls */}
+                  <div className="ml-4 flex flex-col gap-2 items-end">
+                    <Select
+                      value={event.assigned_to_user_id || 'unassigned'}
+                      onValueChange={(value) =>
+                        handleAssign(event.id, value === 'unassigned' ? null : value)
+                      }
+                    >
+                      <SelectTrigger className="w-48">
+                        <SelectValue>
+                          {event.assigned_to ? (
+                            <div className="flex items-center gap-2">
+                              <User className="w-4 h-4" />
+                              {event.assigned_to.email}
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              <User className="w-4 h-4 text-muted-foreground" />
+                              <span className="text-muted-foreground">Unassigned</span>
+                            </div>
+                          )}
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="unassigned">
+                          <div className="flex items-center gap-2">
+                            <User className="w-4 h-4 text-muted-foreground" />
+                            Unassigned
+                          </div>
+                        </SelectItem>
+                        {allMembers?.map((member) => (
+                          <SelectItem key={member.id} value={member.id}>
+                            <div className="flex items-center gap-2">
+                              <User className="w-4 h-4" />
+                              {member.email}
+                            </div>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
                 </div>
               </CardContent>

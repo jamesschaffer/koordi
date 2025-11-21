@@ -36,18 +36,22 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { toast } from 'sonner';
-import { Pencil, Trash2, RefreshCw, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { Pencil, Trash2, RefreshCw, AlertCircle, CheckCircle2, Users } from 'lucide-react';
+import { MembersDialog } from '../components/MembersDialog';
+import { useAuth } from '../contexts/AuthContext';
 
 type DialogMode = 'add' | 'edit' | null;
 
 function Calendars() {
   const queryClient = useQueryClient();
   const token = localStorage.getItem('auth_token') || '';
+  const { user } = useAuth();
 
   const [dialogMode, setDialogMode] = useState<DialogMode>(null);
   const [childMode, setChildMode] = useState<'existing' | 'new'>('existing');
   const [selectedCalendar, setSelectedCalendar] = useState<string | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [membersDialogCalendarId, setMembersDialogCalendarId] = useState<string | null>(null);
 
   // ICS Validation state
   const [icsUrl, setIcsUrl] = useState('');
@@ -513,8 +517,16 @@ function Calendars() {
                     <span className="font-medium text-foreground">{calendar.owner.name}</span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span>Members:</span>
-                    <Badge variant="secondary">{calendar.members.length}</Badge>
+                    <span>Members: {calendar.members.length}</span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={() => setMembersDialogCalendarId(calendar.id)}
+                    >
+                      <Users className="h-3 w-3 mr-1" />
+                      Manage
+                    </Button>
                   </div>
                   <div className="pt-2 border-t">
                     <p className="text-xs truncate" title={calendar.ics_url}>
@@ -565,6 +577,17 @@ function Calendars() {
             </Card>
           ))}
         </div>
+      )}
+
+      {/* Members Dialog */}
+      {membersDialogCalendarId && (
+        <MembersDialog
+          calendarId={membersDialogCalendarId}
+          calendarName={calendars?.find((c) => c.id === membersDialogCalendarId)?.name || ''}
+          isOwner={calendars?.find((c) => c.id === membersDialogCalendarId)?.owner.id === user?.id}
+          open={membersDialogCalendarId !== null}
+          onOpenChange={(open) => !open && setMembersDialogCalendarId(null)}
+        />
       )}
     </div>
   );

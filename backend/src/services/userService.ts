@@ -1,4 +1,5 @@
 import { PrismaClient } from '@prisma/client';
+import { encrypt } from '../utils/encryption';
 
 const prisma = new PrismaClient();
 
@@ -35,7 +36,7 @@ export const createUser = async (data: CreateUserData) => {
       email: data.email,
       name: data.name,
       avatar_url: data.avatar_url,
-      google_refresh_token_enc: data.google_refresh_token_enc,
+      google_refresh_token_enc: data.google_refresh_token_enc ? encrypt(data.google_refresh_token_enc) : undefined,
       google_calendar_id: data.google_calendar_id,
       google_calendar_sync_enabled: true,
     },
@@ -57,7 +58,7 @@ export const updateUserTokens = async (
   return prisma.user.update({
     where: { id: userId },
     data: {
-      google_refresh_token_enc: refreshToken,
+      google_refresh_token_enc: encrypt(refreshToken),
       google_calendar_id: calendarId,
       google_calendar_sync_enabled: true,
     },

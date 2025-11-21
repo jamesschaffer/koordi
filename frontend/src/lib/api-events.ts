@@ -69,6 +69,14 @@ export const assignEvent = (id: string, assignedToUserId: string | null, token: 
     }
   );
 
+export const checkEventConflicts = (eventId: string, assignToUserId: string, token: string) =>
+  apiClient.get<{ conflicts: Event[]; hasConflicts: boolean }>(
+    `/events/${eventId}/conflicts?assign_to_user_id=${assignToUserId}`,
+    {
+      headers: { Authorization: `Bearer ${token}` },
+    }
+  );
+
 export const syncCalendar = (calendarId: string, token: string) =>
   apiClient.post<SyncResult>(
     `/calendars/${calendarId}/sync`,

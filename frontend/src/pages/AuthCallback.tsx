@@ -10,6 +10,7 @@ function AuthCallback() {
   useEffect(() => {
     const token = searchParams.get('token');
     const error = searchParams.get('message');
+    const needsSetup = searchParams.get('needs_setup');
 
     if (error) {
       console.error('Auth error:', error);
@@ -19,7 +20,12 @@ function AuthCallback() {
 
     if (token) {
       setToken(token);
-      navigate('/');
+      // Redirect to setup if user needs to complete profile
+      if (needsSetup === 'true') {
+        navigate('/setup');
+      } else {
+        navigate('/');
+      }
     } else {
       navigate('/login');
     }

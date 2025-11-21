@@ -1,4 +1,6 @@
 import { PrismaClient } from '@prisma/client';
+import { handleEventReassignment } from './supplementalEventService';
+import { syncMainEventToGoogleCalendar, deleteMainEventFromGoogleCalendar } from './mainEventGoogleCalendarSync';
 
 const prisma = new PrismaClient();
 
@@ -129,8 +131,11 @@ export const assignEvent = async (
     throw new Error('Event not found or access denied');
   }
 
+  // Get previous assignment for Google Calendar cleanup
+  const previousAssignedUserId = event.assigned_to_user_id;
+
   // Update assignment
-  return prisma.event.update({
+  const updatedEvent = await prisma.event.update({
     where: { id: eventId },
     data: {
       assigned_to_user_id: assignToUserId,
@@ -151,4 +156,191 @@ export const assignEvent = async (
       },
     },
   });
+
+  // Handle Google Calendar sync for main event
+  try {
+    if (previousAssignedUserId && previousAssignedUserId !== assignToUserId) {
+      // Delete from previous user's calendar (reassignment or unassignment)
+      await deleteMainEventFromGoogleCalendar(eventId, previousAssignedUserId);
+    }
+
+    if (assignToUserId) {
+      // Sync to new user's calendar (assignment or reassignment)
+      await syncMainEventToGoogleCalendar(eventId, assignToUserId);
+    }
+  } catch (error) {
+    console.error('Failed to sync main event to Google Calendar:', error);
+    // Don't throw - Google Calendar sync is optional
+  }
+
+  // Handle supplemental events (drive-to and drive-home)
+  // This runs asynchronously and won't fail the assignment if it errors
+  try {
+    await handleEventReassignment(eventId, previousAssignedUserId, assignToUserId);
+  } catch (error) {
+    console.error('Failed to create supplemental events:', error);
+    // Don't throw - supplemental events are optional and shouldn't fail the assignment
+    // Common reasons: user has no home address, event has no location, Maps API errors
+  }
+
+  return updatedEvent;
+};
+
+/**
+ * Check for conflicts if assigning an event to a user
+ * Returns array of conflicting events (includes both main events and supplemental events)
+ */
+export const checkEventConflicts = async (
+  eventId: string,
+  assignToUserId: string,
+  userId: string
+) => {
+  // Get the event we're trying to assign
+  const event = await getEventById(eventId, userId);
+  if (!event) {
+    throw new Error('Event not found or access denied');
+  }
+
+  // Get the assigned user to check settings
+  const assignedUser = await prisma.user.findUnique({
+    where: { id: assignToUserId },
+  });
+
+  if (!assignedUser) {
+    throw new Error('Assigned user not found');
+  }
+
+  // Calculate the full time window including potential supplemental events
+  // This simulates what supplemental events would be created
+  let effectiveStartTime = event.start_time;
+  let effectiveEndTime = event.end_time;
+
+  // If user has home address and event has location, estimate supplemental event windows
+  if (assignedUser.home_address && assignedUser.home_latitude && assignedUser.home_longitude && event.location) {
+    // Import the arrival time parser
+    const { parseArrivalTime } = await import('./arrivalTimeParser');
+
+    // Parse arrival time to get the buffer
+    const arrivalInfo = parseArrivalTime(
+      event.description,
+      event.start_time,
+      assignedUser.comfort_buffer_minutes
+    );
+
+    // Estimate drive time (use a conservative estimate of 30 minutes for conflict checking)
+    // In reality, supplemental events will calculate actual drive time with Google Maps
+    const estimatedDriveMinutes = 30;
+
+    // Effective start time: arrival time minus estimated drive time
+    effectiveStartTime = new Date(
+      arrivalInfo.arrivalTime.getTime() - estimatedDriveMinutes * 60000
+    );
+
+    // Effective end time: event end time plus estimated return drive time
+    effectiveEndTime = new Date(
+      event.end_time.getTime() + estimatedDriveMinutes * 60000
+    );
+  }
+
+  // Find all main events assigned to the target user that overlap with the effective time window
+  const eventConflicts = await prisma.event.findMany({
+    where: {
+      id: { not: eventId }, // Exclude the event itself
+      assigned_to_user_id: assignToUserId,
+      OR: [
+        // Event starts during this window
+        {
+          AND: [
+            { start_time: { gte: effectiveStartTime } },
+            { start_time: { lt: effectiveEndTime } },
+          ],
+        },
+        // Event ends during this window
+        {
+          AND: [
+            { end_time: { gt: effectiveStartTime } },
+            { end_time: { lte: effectiveEndTime } },
+          ],
+        },
+        // Event completely encompasses this window
+        {
+          AND: [
+            { start_time: { lte: effectiveStartTime } },
+            { end_time: { gte: effectiveEndTime } },
+          ],
+        },
+      ],
+    },
+    include: {
+      event_calendar: {
+        include: {
+          child: true,
+        },
+      },
+    },
+    orderBy: {
+      start_time: 'asc',
+    },
+  });
+
+  // Find all supplemental events (drive times) for other events assigned to this user
+  // that overlap with the effective time window
+  const supplementalConflicts = await prisma.supplementalEvent.findMany({
+    where: {
+      parent_event: {
+        assigned_to_user_id: assignToUserId,
+      },
+      OR: [
+        // Supplemental event starts during this window
+        {
+          AND: [
+            { start_time: { gte: effectiveStartTime } },
+            { start_time: { lt: effectiveEndTime } },
+          ],
+        },
+        // Supplemental event ends during this window
+        {
+          AND: [
+            { end_time: { gt: effectiveStartTime } },
+            { end_time: { lte: effectiveEndTime } },
+          ],
+        },
+        // Supplemental event completely encompasses this window
+        {
+          AND: [
+            { start_time: { lte: effectiveStartTime } },
+            { end_time: { gte: effectiveEndTime } },
+          ],
+        },
+      ],
+    },
+    include: {
+      parent_event: {
+        include: {
+          event_calendar: {
+            include: {
+              child: true,
+            },
+          },
+        },
+      },
+    },
+    orderBy: {
+      start_time: 'asc',
+    },
+  });
+
+  // Combine conflicts from both sources
+  // For supplemental events, we return the parent event (since that's what user sees in the UI)
+  const supplementalParentEvents = supplementalConflicts.map((se) => se.parent_event);
+
+  // Merge and deduplicate (in case both main event and supplemental event conflict)
+  const allConflicts = [...eventConflicts];
+  for (const parentEvent of supplementalParentEvents) {
+    if (!allConflicts.find((e) => e.id === parentEvent.id)) {
+      allConflicts.push(parentEvent);
+    }
+  }
+
+  return allConflicts.sort((a, b) => a.start_time.getTime() - b.start_time.getTime());
 };

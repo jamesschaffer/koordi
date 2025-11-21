@@ -108,4 +108,38 @@ router.patch('/:id/assign', async (req: Request, res: Response) => {
   }
 });
 
+/**
+ * GET /api/events/:id/conflicts
+ * Check for conflicts if assigning event to a user
+ * Query params: assign_to_user_id (required)
+ */
+router.get('/:id/conflicts', async (req: Request, res: Response) => {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const { assign_to_user_id } = req.query;
+
+    if (!assign_to_user_id || typeof assign_to_user_id !== 'string') {
+      return res.status(400).json({ error: 'assign_to_user_id is required' });
+    }
+
+    const conflicts = await eventService.checkEventConflicts(
+      req.params.id,
+      assign_to_user_id,
+      userId
+    );
+
+    res.json({ conflicts, hasConflicts: conflicts.length > 0 });
+  } catch (error: any) {
+    console.error('Check conflicts error:', error);
+    if (error.message.includes('not found') || error.message.includes('access denied')) {
+      return res.status(404).json({ error: error.message });
+    }
+    res.status(500).json({ error: 'Failed to check conflicts' });
+  }
+});
+
 export default router;

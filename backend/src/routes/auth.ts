@@ -3,6 +3,7 @@ import { google } from 'googleapis';
 import { generateToken } from '../utils/jwt';
 import { findOrCreateUser, GoogleUserProfile } from '../services/userService';
 import { authenticateToken } from '../middleware/auth';
+import { autoAcceptPendingInvitations } from '../services/invitationService';
 
 const router = express.Router();
 
@@ -80,7 +81,7 @@ router.get('/google/callback', async (req: Request, res: Response) => {
     // Create or update user
     // Note: refresh_token is only provided on first authorization or when using prompt=consent
     // For returning users, we keep their existing refresh token
-    const refreshToken = tokens.refresh_token ? tokens.refresh_token : undefined;
+    const refreshToken: string | undefined = tokens.refresh_token || undefined;
     const user = await findOrCreateUser(
       {
         id: profile.id || '',
@@ -92,15 +93,22 @@ router.get('/google/callback', async (req: Request, res: Response) => {
       primaryCalendar.id,
     );
 
+    // Auto-accept any pending invitations for this email
+    await autoAcceptPendingInvitations(user.id, user.email);
+
     // Generate JWT
     const token = generateToken({
       userId: user.id,
       email: user.email,
     });
 
-    // Redirect to frontend with token
+    // Check if user needs to complete profile setup (home address required)
+    const needsSetup = !user.home_address || !user.home_latitude || !user.home_longitude;
+
+    // Redirect to frontend with token and setup flag
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-    res.redirect(`${frontendUrl}/auth/callback?token=${token}`);
+    const setupParam = needsSetup ? '&needs_setup=true' : '';
+    res.redirect(`${frontendUrl}/auth/callback?token=${token}${setupParam}`);
   } catch (error) {
     console.error('OAuth callback error:', error);
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
@@ -127,8 +135,13 @@ router.get('/me', authenticateToken, async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    // Don't send sensitive data
-    const { google_refresh_token_enc, ...safeUser } = user;
+    // Don't send sensitive data (only exclude encrypted tokens and coordinates)
+    const {
+      google_refresh_token_enc,
+      home_latitude,
+      home_longitude,
+      ...safeUser
+    } = user;
 
     res.json(safeUser);
   } catch (error) {

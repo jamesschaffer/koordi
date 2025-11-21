@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '@/contexts/AuthContext';
 import { getChildren, createChild, updateChild, deleteChild, getCalendars, type Child, type CreateChildData, type EventCalendar } from '@/lib/api-calendars';
@@ -9,19 +9,32 @@ import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { Badge } from '@/components/ui/badge';
-import { Plus, Pencil, Trash2, Calendar, User } from 'lucide-react';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
+import { MembersDialog } from '@/components/MembersDialog';
+import { Plus, Pencil, Trash2, Calendar, User, Users, Crown, Mail } from 'lucide-react';
 import { toast } from 'sonner';
 
 type DialogMode = 'add' | 'edit' | null;
 
+interface FamilyMember {
+  id: string;
+  name: string;
+  email: string;
+  avatar_url?: string;
+  isOwner: boolean;
+  calendars: { id: string; name: string; color: string }[];
+}
+
 function Children() {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const queryClient = useQueryClient();
 
   // State
   const [dialogMode, setDialogMode] = useState<DialogMode>(null);
   const [selectedChild, setSelectedChild] = useState<Child | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [membersDialogCalendarId, setMembersDialogCalendarId] = useState<string | null>(null);
 
   // Form state
   const [name, setName] = useState('');
@@ -40,6 +53,59 @@ function Children() {
     queryKey: ['calendars'],
     queryFn: () => getCalendars(token),
   });
+
+  // Extract unique family members from calendars
+  const familyMembers = useMemo(() => {
+    const membersMap = new Map<string, FamilyMember>();
+
+    calendars.forEach((calendar) => {
+      // Add owner
+      if (!membersMap.has(calendar.owner.id)) {
+        membersMap.set(calendar.owner.id, {
+          id: calendar.owner.id,
+          name: calendar.owner.name,
+          email: calendar.owner.email,
+          avatar_url: calendar.owner.avatar_url,
+          isOwner: calendar.owner.id === user?.userId,
+          calendars: [],
+        });
+      }
+      membersMap.get(calendar.owner.id)!.calendars.push({
+        id: calendar.id,
+        name: calendar.name,
+        color: calendar.color,
+      });
+
+      // Add accepted members
+      calendar.members
+        .filter((member) => member.status === 'accepted' && member.user)
+        .forEach((member) => {
+          const userId = member.user!.id;
+          if (!membersMap.has(userId)) {
+            membersMap.set(userId, {
+              id: userId,
+              name: member.user!.name,
+              email: member.user!.email,
+              avatar_url: member.user!.avatar_url,
+              isOwner: userId === user?.userId,
+              calendars: [],
+            });
+          }
+          membersMap.get(userId)!.calendars.push({
+            id: calendar.id,
+            name: calendar.name,
+            color: calendar.color,
+          });
+        });
+    });
+
+    return Array.from(membersMap.values()).sort((a, b) => {
+      // Current user first
+      if (a.isOwner) return -1;
+      if (b.isOwner) return 1;
+      return a.name.localeCompare(b.name);
+    });
+  }, [calendars, user?.userId]);
 
   // Create mutation
   const createMutation = useMutation({
@@ -177,12 +243,21 @@ function Children() {
     return age;
   };
 
+  const getInitials = (name: string) => {
+    return name
+      .split(' ')
+      .map((n) => n[0])
+      .join('')
+      .toUpperCase()
+      .slice(0, 2);
+  };
+
   if (isLoadingChildren) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-          <p className="text-gray-600">Loading children...</p>
+          <p className="text-gray-600">Loading family...</p>
         </div>
       </div>
     );
@@ -193,123 +268,235 @@ function Children() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900">Children</h1>
-          <p className="text-gray-600 mt-1">Manage your children and their information</p>
+          <h1 className="text-3xl font-bold text-gray-900">Family</h1>
+          <p className="text-gray-600 mt-1">Manage your family members and children</p>
         </div>
-        <Button onClick={openAddDialog}>
-          <Plus className="h-4 w-4 mr-2" />
-          Add Child
-        </Button>
       </div>
 
-      {/* Children Grid */}
-      {children.length === 0 ? (
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-12">
-            <User className="h-12 w-12 text-gray-400 mb-4" />
-            <h3 className="text-lg font-medium text-gray-900 mb-2">No children yet</h3>
-            <p className="text-gray-600 text-center mb-6">
-              Add your first child to start managing their calendars and schedules.
+      {/* Tabs for Parents and Children */}
+      <Tabs defaultValue="parents" className="w-full">
+        <TabsList>
+          <TabsTrigger value="parents">
+            <Users className="h-4 w-4 mr-2" />
+            Parents ({familyMembers.length})
+          </TabsTrigger>
+          <TabsTrigger value="children">
+            <User className="h-4 w-4 mr-2" />
+            Children ({children.length})
+          </TabsTrigger>
+        </TabsList>
+
+        {/* Parents Tab */}
+        <TabsContent value="parents" className="space-y-4">
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-gray-600">
+              Family members across all your calendars. Invite more parents by managing calendar members.
+            </p>
+          </div>
+
+          {familyMembers.length === 0 ? (
+            <Card>
+              <CardContent className="flex flex-col items-center justify-center py-12">
+                <Users className="h-12 w-12 text-gray-400 mb-4" />
+                <h3 className="text-lg font-medium text-gray-900 mb-2">No family members yet</h3>
+                <p className="text-gray-600 text-center mb-6">
+                  Create calendars and invite other parents to collaborate.
+                </p>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {familyMembers.map((member) => (
+                <Card key={member.id} className="overflow-hidden">
+                  <CardHeader className="pb-4">
+                    <div className="flex items-start justify-between">
+                      <div className="flex items-center gap-3">
+                        <Avatar className="h-12 w-12">
+                          <AvatarImage src={member.avatar_url} alt={member.name} />
+                          <AvatarFallback>{getInitials(member.name)}</AvatarFallback>
+                        </Avatar>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <CardTitle className="text-lg">{member.name}</CardTitle>
+                            {member.isOwner && (
+                              <Badge variant="secondary" className="text-xs">
+                                You
+                              </Badge>
+                            )}
+                          </div>
+                          <CardDescription className="flex items-center gap-1">
+                            <Mail className="h-3 w-3" />
+                            {member.email}
+                          </CardDescription>
+                        </div>
+                      </div>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-sm text-gray-600 flex items-center gap-1">
+                          <Calendar className="h-3 w-3" />
+                          Calendars
+                        </p>
+                        <Badge variant="secondary">{member.calendars.length}</Badge>
+                      </div>
+                      {member.calendars.length > 0 ? (
+                        <div className="space-y-2">
+                          {member.calendars.map((cal) => (
+                            <div
+                              key={cal.id}
+                              className="flex items-center gap-2 text-sm p-2 bg-gray-50 rounded"
+                            >
+                              <div
+                                className="w-3 h-3 rounded-full shrink-0"
+                                style={{ backgroundColor: cal.color }}
+                              />
+                              <span className="truncate flex-1">{cal.name}</span>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-7 text-xs"
+                                onClick={() => setMembersDialogCalendarId(cal.id)}
+                              >
+                                <Users className="h-3 w-3 mr-1" />
+                                Manage
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-sm text-gray-500 italic">No calendars</p>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
+        </TabsContent>
+
+        {/* Children Tab */}
+        <TabsContent value="children" className="space-y-4">
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-gray-600">
+              Manage your children and their information
             </p>
             <Button onClick={openAddDialog}>
               <Plus className="h-4 w-4 mr-2" />
               Add Child
             </Button>
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {children.map((child) => {
-            const childCalendars = getChildCalendars(child.id);
-            const age = calculateAge(child.date_of_birth);
+          </div>
 
-            return (
-              <Card key={child.id} className="overflow-hidden">
-                <CardHeader className="pb-4">
-                  <div className="flex items-start justify-between">
-                    <div className="flex items-center gap-3">
-                      {child.photo_url ? (
-                        <img
-                          src={child.photo_url}
-                          alt={child.name}
-                          className="w-12 h-12 rounded-full object-cover"
-                        />
-                      ) : (
-                        <div className="w-12 h-12 rounded-full bg-blue-100 flex items-center justify-center">
-                          <User className="h-6 w-6 text-blue-600" />
+          {children.length === 0 ? (
+            <Card>
+              <CardContent className="flex flex-col items-center justify-center py-12">
+                <User className="h-12 w-12 text-gray-400 mb-4" />
+                <h3 className="text-lg font-medium text-gray-900 mb-2">No children yet</h3>
+                <p className="text-gray-600 text-center mb-6">
+                  Add your first child to start managing their calendars and schedules.
+                </p>
+                <Button onClick={openAddDialog}>
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add Child
+                </Button>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {children.map((child) => {
+                const childCalendars = getChildCalendars(child.id);
+                const age = calculateAge(child.date_of_birth);
+
+                return (
+                  <Card key={child.id} className="overflow-hidden">
+                    <CardHeader className="pb-4">
+                      <div className="flex items-start justify-between">
+                        <div className="flex items-center gap-3">
+                          {child.photo_url ? (
+                            <img
+                              src={child.photo_url}
+                              alt={child.name}
+                              className="w-12 h-12 rounded-full object-cover"
+                            />
+                          ) : (
+                            <div className="w-12 h-12 rounded-full bg-blue-100 flex items-center justify-center">
+                              <User className="h-6 w-6 text-blue-600" />
+                            </div>
+                          )}
+                          <div>
+                            <CardTitle className="text-lg">{child.name}</CardTitle>
+                            {child.date_of_birth && (
+                              <CardDescription>
+                                {age !== null && `Age ${age}`}
+                              </CardDescription>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => openEditDialog(child)}
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="text-destructive"
+                            onClick={() => setDeleteConfirmId(child.id)}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      {child.date_of_birth && (
+                        <div>
+                          <p className="text-sm text-gray-600">Date of Birth</p>
+                          <p className="text-sm font-medium">{formatDate(child.date_of_birth)}</p>
                         </div>
                       )}
+
                       <div>
-                        <CardTitle className="text-lg">{child.name}</CardTitle>
-                        {child.date_of_birth && (
-                          <CardDescription>
-                            {age !== null && `Age ${age}`}
-                          </CardDescription>
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="text-sm text-gray-600 flex items-center gap-1">
+                            <Calendar className="h-3 w-3" />
+                            Calendars
+                          </p>
+                          <Badge variant="secondary">{childCalendars.length}</Badge>
+                        </div>
+                        {childCalendars.length > 0 ? (
+                          <div className="space-y-2">
+                            {childCalendars.map((cal) => (
+                              <div
+                                key={cal.id}
+                                className="flex items-center gap-2 text-sm p-2 bg-gray-50 rounded"
+                              >
+                                <div
+                                  className="w-3 h-3 rounded-full shrink-0"
+                                  style={{ backgroundColor: cal.color }}
+                                />
+                                <span className="truncate">{cal.name}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-sm text-gray-500 italic">No calendars yet</p>
                         )}
                       </div>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => openEditDialog(child)}
-                      >
-                        <Pencil className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="text-destructive"
-                        onClick={() => setDeleteConfirmId(child.id)}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  </div>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  {child.date_of_birth && (
-                    <div>
-                      <p className="text-sm text-gray-600">Date of Birth</p>
-                      <p className="text-sm font-medium">{formatDate(child.date_of_birth)}</p>
-                    </div>
-                  )}
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
+          )}
+        </TabsContent>
+      </Tabs>
 
-                  <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <p className="text-sm text-gray-600 flex items-center gap-1">
-                        <Calendar className="h-3 w-3" />
-                        Calendars
-                      </p>
-                      <Badge variant="secondary">{childCalendars.length}</Badge>
-                    </div>
-                    {childCalendars.length > 0 ? (
-                      <div className="space-y-2">
-                        {childCalendars.map((cal) => (
-                          <div
-                            key={cal.id}
-                            className="flex items-center gap-2 text-sm p-2 bg-gray-50 rounded"
-                          >
-                            <div
-                              className="w-3 h-3 rounded-full shrink-0"
-                              style={{ backgroundColor: cal.color }}
-                            />
-                            <span className="truncate">{cal.name}</span>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="text-sm text-gray-500 italic">No calendars yet</p>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Add/Edit Dialog */}
+      {/* Add/Edit Child Dialog */}
       <Dialog open={dialogMode !== null} onOpenChange={(open) => !open && closeDialog()}>
         <DialogContent>
           <DialogHeader>
@@ -415,6 +602,17 @@ function Children() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Members Dialog */}
+      {membersDialogCalendarId && (
+        <MembersDialog
+          calendarId={membersDialogCalendarId}
+          calendarName={calendars?.find((c) => c.id === membersDialogCalendarId)?.name || ''}
+          isOwner={calendars?.find((c) => c.id === membersDialogCalendarId)?.owner.id === user?.id}
+          open={membersDialogCalendarId !== null}
+          onOpenChange={(open) => !open && setMembersDialogCalendarId(null)}
+        />
+      )}
     </div>
   );
 }

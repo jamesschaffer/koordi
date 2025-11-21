@@ -106,3 +106,85 @@ export const deleteChild = (id: string, token: string) =>
   apiClient.delete(`/children/${id}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
+
+// Invitation APIs
+export interface Membership {
+  id: string;
+  status: 'pending' | 'accepted' | 'declined';
+  invited_email: string;
+  invited_at: string;
+  responded_at?: string;
+  invitation_token?: string;
+  user?: {
+    id: string;
+    name: string;
+    email: string;
+    avatar_url?: string;
+  };
+  invited_by: {
+    name: string;
+    email: string;
+  };
+  event_calendar?: {
+    id: string;
+    name: string;
+    child: {
+      name: string;
+    };
+    owner: {
+      name: string;
+      email: string;
+      avatar_url?: string;
+    };
+  };
+}
+
+export interface CalendarMembers {
+  owner: {
+    id: string;
+    name: string;
+    email: string;
+    avatar_url?: string;
+  };
+  members: Membership[];
+}
+
+export const sendInvitation = (calendarId: string, email: string, token: string) =>
+  apiClient.post<Membership>(`/event-calendars/${calendarId}/invitations`, { email }, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+export const getCalendarMembers = (calendarId: string, token: string) =>
+  apiClient.get<CalendarMembers>(`/event-calendars/${calendarId}/members`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+export const getPendingInvitations = (token: string) =>
+  apiClient.get<Membership[]>('/invitations/pending', {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+export const acceptInvitation = (invitationToken: string, token: string) =>
+  apiClient.post<Membership>(`/invitations/${invitationToken}/accept`, {}, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+export const declineInvitation = (invitationToken: string, token: string) =>
+  apiClient.post<Membership>(`/invitations/${invitationToken}/decline`, {}, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+export const resendInvitation = (invitationId: string, token: string) =>
+  apiClient.post<Membership>(`/invitations/${invitationId}/resend`, {}, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+export const cancelInvitation = (invitationId: string, token: string) =>
+  apiClient.delete(`/invitations/${invitationId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+export const removeMember = (membershipId: string, token: string) =>
+  apiClient.delete(`/memberships/${membershipId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
