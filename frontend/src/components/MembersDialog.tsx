@@ -31,7 +31,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { toast } from 'sonner';
-import { Mail, Send, Trash2, RefreshCw, UserMinus, Crown, Clock, CheckCircle2, XCircle } from 'lucide-react';
+import { Mail, UserPlus, Trash2, RefreshCw, UserMinus, Crown, Clock, CheckCircle2, XCircle } from 'lucide-react';
 
 interface MembersDialogProps {
   calendarId: string;
@@ -149,8 +149,8 @@ export function MembersDialog({ calendarId, calendarName, isOwner, open, onOpenC
             {isOwner && (
               <div className="space-y-2 pb-4 border-b">
                 <h3 className="text-sm font-medium flex items-center gap-2">
-                  <Send className="h-4 w-4 text-blue-500" />
-                  Invite New Member
+                  <UserPlus className="h-4 w-4 text-blue-500" />
+                  Add Parent
                 </h3>
                 <form onSubmit={handleSendInvitation} className="flex gap-2">
                   <div className="flex-1">
@@ -163,42 +163,27 @@ export function MembersDialog({ calendarId, calendarName, isOwner, open, onOpenC
                     />
                   </div>
                   <Button type="submit" disabled={sendInvitationMutation.isPending}>
-                    <Send className="h-4 w-4 mr-2" />
-                    {sendInvitationMutation.isPending ? 'Sending...' : 'Send'}
+                    <UserPlus className="h-4 w-4 mr-2" />
+                    {sendInvitationMutation.isPending ? 'Adding...' : 'Add Parent'}
                   </Button>
                 </form>
                 <p className="text-xs text-muted-foreground">
-                  They'll receive an email invitation and gain access once they accept.
+                  New users will receive an email invitation. Existing users will automatically be added to the event calendar.
                 </p>
               </div>
             )}
-
-            {/* Owner Section */}
-            <div className="space-y-2">
-              <h3 className="text-sm font-medium flex items-center gap-2">
-                <Crown className="h-4 w-4 text-yellow-500" />
-                Calendar Owner
-              </h3>
-              {membersData && (
-                <div className="flex items-center gap-3 p-3 rounded-lg bg-yellow-50 dark:bg-yellow-900/20">
-                  <Avatar>
-                    <AvatarImage src={membersData.owner.avatar_url} />
-                    <AvatarFallback>{getInitials(membersData.owner.name)}</AvatarFallback>
-                  </Avatar>
-                  <div className="flex-1 min-w-0">
-                    <p className="font-medium truncate">{membersData.owner.name}</p>
-                    <p className="text-sm text-muted-foreground truncate">{membersData.owner.email}</p>
-                  </div>
-                </div>
-              )}
-            </div>
 
             {/* Accepted Members Section */}
             {acceptedMembers.length > 0 && (
               <div className="space-y-2">
                 <h3 className="text-sm font-medium flex items-center gap-2">
                   <CheckCircle2 className="h-4 w-4 text-green-500" />
-                  Members ({acceptedMembers.length})
+                  Parents ({acceptedMembers.length})
+                  {membersData && (
+                    <span className="text-xs text-muted-foreground font-normal ml-2">
+                      • Owner: {membersData.owner.name}
+                    </span>
+                  )}
                 </h3>
                 <div className="space-y-2">
                   {acceptedMembers.map((member) => (
@@ -214,7 +199,7 @@ export function MembersDialog({ calendarId, calendarName, isOwner, open, onOpenC
                         <p className="font-medium truncate">{member.user?.name || member.invited_email}</p>
                         <p className="text-sm text-muted-foreground truncate">{member.user?.email || member.invited_email}</p>
                       </div>
-                      {isOwner && (
+                      {isOwner && member.user?.id !== membersData?.owner.id && (
                         <Button
                           variant="ghost"
                           size="icon"

@@ -188,3 +188,8 @@ export const removeMember = (membershipId: string, token: string) =>
   apiClient.delete(`/memberships/${membershipId}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
+
+export const getFamilyMembers = (token: string) =>
+  apiClient.get(`/family-members`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });

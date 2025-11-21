@@ -7,6 +7,106 @@ const prisma = new PrismaClient();
 const MAX_MEMBERS_PER_CALENDAR = 10;
 
 /**
+ * Get all family members for a user
+ * This includes anyone who has ever been a member of any calendar owned by the user
+ * or any calendar the user is a member of (both current and historical)
+ * @param userId - User ID
+ * @returns List of family members with their calendar associations
+ */
+export async function getFamilyMembers(userId: string) {
+  // Get all calendars owned by or associated with the user
+  const userCalendars = await prisma.eventCalendar.findMany({
+    where: {
+      OR: [
+        { owner_id: userId },
+        {
+          members: {
+            some: {
+              user_id: userId,
+              status: 'accepted',
+            },
+          },
+        },
+      ],
+    },
+    include: {
+      owner: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          avatar_url: true,
+        },
+      },
+      members: {
+        where: {
+          user_id: { not: null }, // Only include memberships where user has accepted (has user_id)
+        },
+        include: {
+          user: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              avatar_url: true,
+            },
+          },
+        },
+      },
+    },
+  });
+
+  // Build a map of unique family members
+  const membersMap = new Map<string, any>();
+
+  userCalendars.forEach((calendar) => {
+    // Add owner
+    if (!membersMap.has(calendar.owner.id)) {
+      membersMap.set(calendar.owner.id, {
+        id: calendar.owner.id,
+        name: calendar.owner.name,
+        email: calendar.owner.email,
+        avatar_url: calendar.owner.avatar_url,
+        calendars: [],
+      });
+    }
+    membersMap.get(calendar.owner.id)!.calendars.push({
+      id: calendar.id,
+      name: calendar.name,
+    });
+
+    // Add all members (both current and historical - anyone with a user_id)
+    calendar.members.forEach((membership) => {
+      if (membership.user) {
+        const memberId = membership.user.id;
+        if (!membersMap.has(memberId)) {
+          membersMap.set(memberId, {
+            id: membership.user.id,
+            name: membership.user.name,
+            email: membership.user.email,
+            avatar_url: membership.user.avatar_url,
+            calendars: [],
+          });
+        }
+
+        // Only add calendar if they're currently a member (status: accepted)
+        if (membership.status === 'accepted') {
+          const memberCalendars = membersMap.get(memberId)!.calendars;
+          if (!memberCalendars.some((c: any) => c.id === calendar.id)) {
+            memberCalendars.push({
+              id: calendar.id,
+              name: calendar.name,
+            });
+          }
+        }
+      }
+    });
+  });
+
+  return Array.from(membersMap.values());
+}
+
+/**
  * Generate a secure invitation token
  */
 function generateInvitationToken(): string {
@@ -15,10 +115,11 @@ function generateInvitationToken(): string {
 
 /**
  * Send invitation to join an Event Calendar
+ * If the email belongs to an existing user, they're added directly without an email
  * @param calendarId - The Event Calendar ID
  * @param invitedEmail - Email of the person being invited
  * @param invitedByUserId - User ID of person sending invitation
- * @returns Created invitation
+ * @returns Created invitation or membership
  */
 export async function sendInvitation(
   calendarId: string,
@@ -32,6 +133,7 @@ export async function sendInvitation(
       members: {
         where: { status: 'accepted' },
       },
+      child: true,
     },
   });
 
@@ -70,10 +172,69 @@ export async function sendInvitation(
     }
   }
 
+  // Check if user already exists with this email (existing family member)
+  const existingUser = await prisma.user.findUnique({
+    where: { email: invitedEmail },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+    },
+  });
+
   // Generate invitation token
   const invitationToken = generateInvitationToken();
 
-  // Create invitation
+  // Get invited_by user info
+  const invitedBy = await prisma.user.findUnique({
+    where: { id: invitedByUserId },
+    select: {
+      name: true,
+      email: true,
+    },
+  });
+
+  // If user exists, add them directly without sending email
+  if (existingUser) {
+    const membership = await prisma.eventCalendarMembership.create({
+      data: {
+        event_calendar_id: calendarId,
+        user_id: existingUser.id,
+        invited_email: invitedEmail,
+        invitation_token: invitationToken,
+        invited_by_user_id: invitedByUserId,
+        status: 'accepted',
+        responded_at: new Date(),
+      },
+      include: {
+        event_calendar: {
+          include: {
+            child: true,
+          },
+        },
+        invited_by: {
+          select: {
+            name: true,
+            email: true,
+          },
+        },
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            avatar_url: true,
+          },
+        },
+      },
+    });
+
+    console.log(`Existing user ${existingUser.name} (${existingUser.email}) added directly to calendar ${calendar.name}`);
+
+    return membership;
+  }
+
+  // User doesn't exist - create pending invitation and send email
   const invitation = await prisma.eventCalendarMembership.create({
     data: {
       event_calendar_id: calendarId,
@@ -97,19 +258,21 @@ export async function sendInvitation(
     },
   });
 
-  console.log(`Invitation sent to ${invitedEmail} for calendar ${calendar.name}`);
+  console.log(`Invitation sent to new user ${invitedEmail} for calendar ${calendar.name}`);
 
   // Send invitation email (async, don't block on failure)
-  sendInvitationEmail({
-    to: invitedEmail,
-    invitedBy: invitation.invited_by.name,
-    calendarName: invitation.event_calendar.name,
-    childName: invitation.event_calendar.child.name,
-    invitationToken: invitationToken,
-  }).catch((error) => {
-    console.error('Failed to send invitation email:', error);
-    // Don't throw - invitation was created successfully, email is secondary
-  });
+  if (invitedBy) {
+    sendInvitationEmail({
+      to: invitedEmail,
+      invitedBy: invitedBy.name,
+      calendarName: invitation.event_calendar.name,
+      childName: invitation.event_calendar.child.name,
+      invitationToken: invitationToken,
+    }).catch((error) => {
+      console.error('Failed to send invitation email:', error);
+      // Don't throw - invitation was created successfully, email is secondary
+    });
+  }
 
   return invitation;
 }
@@ -396,15 +559,27 @@ export async function cancelInvitation(invitationId: string, userId: string) {
  * Remove a member from an Event Calendar
  * @param membershipId - The membership ID
  * @param userId - User ID requesting removal (must be calendar owner)
+ * @returns Information about the removal for WebSocket broadcasting
  */
 export async function removeMember(membershipId: string, userId: string) {
   // Find the membership
   const membership = await prisma.eventCalendarMembership.findUnique({
     where: { id: membershipId },
     include: {
-      event_calendar: true,
+      event_calendar: {
+        include: {
+          owner: {
+            select: {
+              id: true,
+              name: true,
+            },
+          },
+        },
+      },
       user: {
         select: {
+          id: true,
+          name: true,
           email: true,
         },
       },
@@ -424,12 +599,66 @@ export async function removeMember(membershipId: string, userId: string) {
     throw new Error('Can only remove accepted members');
   }
 
+  let reassignedEventIds: string[] = [];
+
+  // Reassign member's events to calendar owner before removing
+  if (membership.user_id) {
+    // Find all events assigned to this member in this calendar
+    const assignedEvents = await prisma.event.findMany({
+      where: {
+        event_calendar_id: membership.event_calendar_id,
+        assigned_to_user_id: membership.user_id,
+      },
+      select: {
+        id: true,
+        title: true,
+      },
+    });
+
+    if (assignedEvents.length > 0) {
+      console.log(`Reassigning ${assignedEvents.length} events from ${membership.user?.email} to calendar owner ${membership.event_calendar.owner.name}`);
+
+      reassignedEventIds = assignedEvents.map(e => e.id);
+
+      // Delete all supplemental events for these events (they're personalized for the removed user)
+      await prisma.supplementalEvent.deleteMany({
+        where: {
+          parent_event_id: {
+            in: reassignedEventIds,
+          },
+        },
+      });
+
+      // Reassign events to calendar owner
+      await prisma.event.updateMany({
+        where: {
+          event_calendar_id: membership.event_calendar_id,
+          assigned_to_user_id: membership.user_id,
+        },
+        data: {
+          assigned_to_user_id: membership.event_calendar.owner_id,
+        },
+      });
+
+      console.log(`Reassigned events: ${assignedEvents.map(e => e.title).join(', ')}`);
+    }
+  }
+
   // Delete the membership
   await prisma.eventCalendarMembership.delete({
     where: { id: membershipId },
   });
 
   console.log(`Removed ${membership.user?.email} from calendar ${membership.event_calendar.name}`);
+
+  // Return data for WebSocket broadcasting
+  return {
+    calendarId: membership.event_calendar_id,
+    ownerId: membership.event_calendar.owner_id,
+    userName: membership.user?.name || 'Unknown',
+    userEmail: membership.user?.email || '',
+    reassignedEventIds,
+  };
 }
 
 /**

@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '@/contexts/AuthContext';
-import { getChildren, createChild, updateChild, deleteChild, getCalendars, type Child, type CreateChildData, type EventCalendar } from '@/lib/api-calendars';
+import { getChildren, createChild, updateChild, deleteChild, getCalendars, getFamilyMembers, type Child, type CreateChildData, type EventCalendar } from '@/lib/api-calendars';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -54,58 +54,26 @@ function Children() {
     queryFn: () => getCalendars(token),
   });
 
-  // Extract unique family members from calendars
+  // Fetch family members (includes historical members)
+  const { data: familyMembersData = [] } = useQuery({
+    queryKey: ['family-members'],
+    queryFn: () => getFamilyMembers(token),
+  });
+
+  // Process family members to add isOwner flag and sort
   const familyMembers = useMemo(() => {
-    const membersMap = new Map<string, FamilyMember>();
-
-    calendars.forEach((calendar) => {
-      // Add owner
-      if (!membersMap.has(calendar.owner.id)) {
-        membersMap.set(calendar.owner.id, {
-          id: calendar.owner.id,
-          name: calendar.owner.name,
-          email: calendar.owner.email,
-          avatar_url: calendar.owner.avatar_url,
-          isOwner: calendar.owner.id === user?.userId,
-          calendars: [],
-        });
-      }
-      membersMap.get(calendar.owner.id)!.calendars.push({
-        id: calendar.id,
-        name: calendar.name,
-        color: calendar.color,
+    return familyMembersData
+      .map((member: any) => ({
+        ...member,
+        isOwner: member.id === user?.userId,
+      }))
+      .sort((a: any, b: any) => {
+        // Current user first
+        if (a.isOwner) return -1;
+        if (b.isOwner) return 1;
+        return a.name.localeCompare(b.name);
       });
-
-      // Add accepted members
-      calendar.members
-        .filter((member) => member.status === 'accepted' && member.user)
-        .forEach((member) => {
-          const userId = member.user!.id;
-          if (!membersMap.has(userId)) {
-            membersMap.set(userId, {
-              id: userId,
-              name: member.user!.name,
-              email: member.user!.email,
-              avatar_url: member.user!.avatar_url,
-              isOwner: userId === user?.userId,
-              calendars: [],
-            });
-          }
-          membersMap.get(userId)!.calendars.push({
-            id: calendar.id,
-            name: calendar.name,
-            color: calendar.color,
-          });
-        });
-    });
-
-    return Array.from(membersMap.values()).sort((a, b) => {
-      // Current user first
-      if (a.isOwner) return -1;
-      if (b.isOwner) return 1;
-      return a.name.localeCompare(b.name);
-    });
-  }, [calendars, user?.userId]);
+  }, [familyMembersData, user?.userId]);
 
   // Create mutation
   const createMutation = useMutation({

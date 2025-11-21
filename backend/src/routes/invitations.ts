@@ -9,9 +9,35 @@ import {
   cancelInvitation,
   removeMember,
   getUserPendingInvitations,
+  getFamilyMembers,
 } from '../services/invitationService';
+import { SocketEvent, emitToCalendar } from '../config/socket';
 
 const router = express.Router();
+
+/**
+ * GET /api/family-members
+ * Get all family members (users who have ever been part of any of the user's calendars)
+ */
+router.get('/family-members', authenticateToken, async (req: Request, res: Response) => {
+  try {
+    const userId = req.user?.userId;
+
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const familyMembers = await getFamilyMembers(userId);
+
+    res.json(familyMembers);
+  } catch (error) {
+    console.error('Get family members error:', error);
+    if (error instanceof Error) {
+      return res.status(400).json({ error: error.message });
+    }
+    res.status(500).json({ error: 'Failed to get family members' });
+  }
+});
 
 /**
  * POST /api/event-calendars/:calendarId/invitations
@@ -211,7 +237,29 @@ router.delete('/memberships/:id', authenticateToken, async (req: Request, res: R
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    await removeMember(id, userId);
+    const result = await removeMember(id, userId);
+
+    // Broadcast member removal to all calendar members via WebSocket
+    const io = req.app.get('io');
+    if (io && result) {
+      emitToCalendar(io, result.calendarId, SocketEvent.MEMBER_REMOVED, {
+        calendar_id: result.calendarId,
+        user_name: result.userName,
+        user_email: result.userEmail,
+      });
+
+      // If events were reassigned, broadcast those updates too
+      if (result.reassignedEventIds && result.reassignedEventIds.length > 0) {
+        // Broadcast event reassignment for each event
+        result.reassignedEventIds.forEach((eventId) => {
+          emitToCalendar(io, result.calendarId, SocketEvent.EVENT_ASSIGNED, {
+            event_id: eventId,
+            assigned_to_user_id: result.ownerId,
+            event_calendar_id: result.calendarId,
+          });
+        });
+      }
+    }
 
     res.status(204).send();
   } catch (error) {
