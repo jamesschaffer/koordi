@@ -7,6 +7,9 @@ import userRoutes from './routes/user';
 import eventCalendarRoutes from './routes/eventCalendar';
 import childRoutes from './routes/child';
 import eventRoutes from './routes/event';
+import jobRoutes from './routes/jobs';
+import './workers/icsSync.worker'; // Initialize worker
+import { initializeScheduler } from './jobs/scheduler';
 
 dotenv.config();
 
@@ -46,12 +49,16 @@ app.use('/api/users', userRoutes);
 app.use('/api/calendars', eventCalendarRoutes);
 app.use('/api/children', childRoutes);
 app.use('/api/events', eventRoutes);
+app.use('/api/jobs', jobRoutes);
 
 // Start server
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
   console.log(`📊 Health check: http://localhost:${PORT}/api/health`);
   console.log(`🔧 Environment: ${process.env.NODE_ENV || 'development'}`);
+
+  // Initialize background job scheduler
+  initializeScheduler();
 });
 
 export default app;

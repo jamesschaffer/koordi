@@ -23,12 +23,18 @@ const SCOPES = [
 /**
  * GET /api/auth/google
  * Initiates Google OAuth flow
+ * Query params:
+ *   - force_consent: Set to 'true' to force re-authorization
  */
 router.get('/google', (req: Request, res: Response) => {
+  const forceConsent = req.query.force_consent === 'true';
+
   const authUrl = oauth2Client.generateAuthUrl({
     access_type: 'offline',
     scope: SCOPES,
-    prompt: 'consent', // Force consent to get refresh token
+    // Use 'select_account' for returning users (better UX)
+    // Use 'consent' only when we need a new refresh token
+    prompt: forceConsent ? 'consent' : 'select_account',
   });
 
   res.json({ url: authUrl });
@@ -49,10 +55,6 @@ router.get('/google/callback', async (req: Request, res: Response) => {
     // Exchange code for tokens
     const { tokens } = await oauth2Client.getToken(code);
     oauth2Client.setCredentials(tokens);
-
-    if (!tokens.refresh_token) {
-      return res.status(400).json({ error: 'No refresh token received' });
-    }
 
     // Get user profile
     const oauth2 = google.oauth2({
@@ -76,6 +78,9 @@ router.get('/google/callback', async (req: Request, res: Response) => {
     }
 
     // Create or update user
+    // Note: refresh_token is only provided on first authorization or when using prompt=consent
+    // For returning users, we keep their existing refresh token
+    const refreshToken = tokens.refresh_token ? tokens.refresh_token : undefined;
     const user = await findOrCreateUser(
       {
         id: profile.id || '',
@@ -83,7 +88,7 @@ router.get('/google/callback', async (req: Request, res: Response) => {
         name: profile.name,
         picture: profile.picture,
       } as GoogleUserProfile,
-      tokens.refresh_token,
+      refreshToken,
       primaryCalendar.id,
     );
 
