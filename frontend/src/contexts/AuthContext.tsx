@@ -10,6 +10,7 @@ interface User {
 
 interface AuthContextType {
   user: User | null;
+  token: string | null;
   loading: boolean;
   login: () => Promise<void>;
   logout: () => void;
@@ -20,12 +21,14 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
+  const [token, setTokenState] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   // Get current user on mount
   useEffect(() => {
-    const token = localStorage.getItem('auth_token');
-    if (token) {
+    const storedToken = localStorage.getItem('auth_token');
+    if (storedToken) {
+      setTokenState(storedToken);
       fetchCurrentUser();
     } else {
       setLoading(false);
@@ -51,6 +54,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       console.error('Failed to fetch user:', error);
       localStorage.removeItem('auth_token');
       setUser(null);
+      setTokenState(null);
     } finally {
       setLoading(false);
     }
@@ -71,16 +75,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const logout = () => {
     localStorage.removeItem('auth_token');
     setUser(null);
+    setTokenState(null);
     window.location.href = '/';
   };
 
-  const setToken = (token: string) => {
-    localStorage.setItem('auth_token', token);
+  const setToken = (newToken: string) => {
+    localStorage.setItem('auth_token', newToken);
+    setTokenState(newToken);
     fetchCurrentUser();
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout, setToken }}>
+    <AuthContext.Provider value={{ user, token, loading, login, logout, setToken }}>
       {children}
     </AuthContext.Provider>
   );

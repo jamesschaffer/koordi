@@ -3,6 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import dotenv from 'dotenv';
 import authRoutes from './routes/auth';
+import userRoutes from './routes/user';
 import eventCalendarRoutes from './routes/eventCalendar';
 import childRoutes from './routes/child';
 import eventRoutes from './routes/event';
@@ -41,6 +42,7 @@ app.get('/api', (req, res) => {
 });
 
 app.use('/api/auth', authRoutes);
+app.use('/api/users', userRoutes);
 app.use('/api/calendars', eventCalendarRoutes);
 app.use('/api/children', childRoutes);
 app.use('/api/events', eventRoutes);

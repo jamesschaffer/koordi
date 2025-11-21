@@ -5,6 +5,8 @@ import Dashboard from './pages/Dashboard';
 import Login from './pages/Login';
 import AuthCallback from './pages/AuthCallback';
 import Calendars from './pages/Calendars';
+import Children from './pages/Children';
+import Settings from './pages/Settings';
 import { Toaster } from '@/components/ui/sonner';
 
 function App() {
@@ -27,6 +29,8 @@ function App() {
         >
           <Route index element={<Dashboard />} />
           <Route path="/calendars" element={<Calendars />} />
+          <Route path="/children" element={<Children />} />
+          <Route path="/settings" element={<Settings />} />
           {/* More protected routes will be added here */}
         </Route>
       </Routes>

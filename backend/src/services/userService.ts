@@ -90,3 +90,48 @@ export const findOrCreateUser = async (
 
   return user;
 };
+
+// Delete user account
+export const deleteUser = async (userId: string) => {
+  // Note: Prisma will handle cascading deletes based on schema
+  return prisma.user.delete({
+    where: { id: userId },
+  });
+};
+
+// Update user address
+export const updateUserAddress = async (
+  userId: string,
+  address: string,
+  latitude?: number,
+  longitude?: number,
+) => {
+  return prisma.user.update({
+    where: { id: userId },
+    data: {
+      home_address: address,
+      home_latitude: latitude,
+      home_longitude: longitude,
+    },
+  });
+};
+
+// Update comfort buffer
+export const updateUserComfortBuffer = async (userId: string, minutes: number) => {
+  return prisma.user.update({
+    where: { id: userId },
+    data: {
+      comfort_buffer_minutes: minutes,
+    },
+  });
+};
+
+// Update supplemental event retention
+export const updateUserRetention = async (userId: string, keepSupplemental: boolean) => {
+  return prisma.user.update({
+    where: { id: userId },
+    data: {
+      keep_supplemental_events: keepSupplemental,
+    },
+  });
+};

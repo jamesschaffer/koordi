@@ -69,6 +69,23 @@ export const deleteCalendar = (id: string, token: string) =>
     headers: { Authorization: `Bearer ${token}` },
   });
 
+// ICS Validation
+export interface ICSValidation {
+  valid: boolean;
+  calendar_name?: string;
+  event_count?: number;
+  date_range?: {
+    start: string;
+    end: string;
+  };
+  error?: string;
+}
+
+export const validateICS = (ics_url: string, token: string) =>
+  apiClient.post<ICSValidation>('/calendars/validate-ics', { ics_url }, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
 // Children APIs
 export const getChildren = (token: string) =>
   apiClient.get<Child[]>('/children', {

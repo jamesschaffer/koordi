@@ -1,6 +1,15 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { getCalendars, getChildren, createCalendar, createChild } from '../lib/api-calendars';
+import {
+  getCalendars,
+  getChildren,
+  createCalendar,
+  createChild,
+  updateCalendar,
+  deleteCalendar,
+  validateICS,
+  type ICSValidation,
+} from '../lib/api-calendars';
 import { syncCalendar } from '../lib/api-events';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
@@ -8,14 +17,43 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { toast } from 'sonner';
+import { Pencil, Trash2, RefreshCw, AlertCircle, CheckCircle2 } from 'lucide-react';
+
+type DialogMode = 'add' | 'edit' | null;
 
 function Calendars() {
   const queryClient = useQueryClient();
   const token = localStorage.getItem('auth_token') || '';
 
-  const [showCalendarForm, setShowCalendarForm] = useState(false);
+  const [dialogMode, setDialogMode] = useState<DialogMode>(null);
   const [childMode, setChildMode] = useState<'existing' | 'new'>('existing');
+  const [selectedCalendar, setSelectedCalendar] = useState<string | null>(null);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+
+  // ICS Validation state
+  const [icsUrl, setIcsUrl] = useState('');
+  const [icsValidation, setIcsValidation] = useState<ICSValidation | null>(null);
+  const [isValidating, setIsValidating] = useState(false);
+  const [validationStep, setValidationStep] = useState<'url' | 'details'>('url');
 
   // Fetch calendars and children
   const { data: calendars, isLoading: calendarsLoading } = useQuery({
@@ -28,17 +66,73 @@ function Calendars() {
     queryFn: () => getChildren(token),
   });
 
+  // Get selected calendar for editing
+  const calendarToEdit = calendars?.find((c) => c.id === selectedCalendar);
+
+  // Validate ICS mutation
+  const validateICSMutation = useMutation({
+    mutationFn: (url: string) => validateICS(url, token),
+    onSuccess: (data) => {
+      if (data.valid) {
+        setIcsValidation(data);
+        setValidationStep('details');
+        toast.success('Calendar feed validated!');
+      } else {
+        toast.error('Invalid calendar feed', {
+          description: data.error || 'Please check the URL and try again',
+        });
+      }
+    },
+    onError: (error: any) => {
+      toast.error('Failed to validate ICS feed', {
+        description: error.message || 'Please try again',
+      });
+    },
+  });
+
   // Create calendar mutation
   const createCalendarMutation = useMutation({
-    mutationFn: (data: { name: string; ics_url: string; child_id: string }) =>
+    mutationFn: (data: { name: string; ics_url: string; child_id: string; color?: string }) =>
       createCalendar(data, token),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['calendars'] });
-      setShowCalendarForm(false);
+      resetDialog();
       toast.success('Calendar created successfully!');
     },
     onError: (error: any) => {
       toast.error('Failed to create calendar', {
+        description: error.message || 'Please try again',
+      });
+    },
+  });
+
+  // Update calendar mutation
+  const updateCalendarMutation = useMutation({
+    mutationFn: ({ id, data }: { id: string; data: { name?: string; ics_url?: string; color?: string } }) =>
+      updateCalendar(id, data, token),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['calendars'] });
+      resetDialog();
+      toast.success('Calendar updated successfully!');
+    },
+    onError: (error: any) => {
+      toast.error('Failed to update calendar', {
+        description: error.message || 'Please try again',
+      });
+    },
+  });
+
+  // Delete calendar mutation
+  const deleteCalendarMutation = useMutation({
+    mutationFn: (id: string) => deleteCalendar(id, token),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['calendars'] });
+      queryClient.invalidateQueries({ queryKey: ['events'] });
+      setDeleteConfirmId(null);
+      toast.success('Calendar deleted successfully');
+    },
+    onError: (error: any) => {
+      toast.error('Failed to delete calendar', {
         description: error.message || 'Please try again',
       });
     },
@@ -69,33 +163,80 @@ function Calendars() {
     },
   });
 
-  const handleCreateCalendar = async (e: React.FormEvent<HTMLFormElement>) => {
+  const resetDialog = () => {
+    setDialogMode(null);
+    setSelectedCalendar(null);
+    setIcsUrl('');
+    setIcsValidation(null);
+    setValidationStep('url');
+    setChildMode('existing');
+  };
+
+  const handleValidateICS = () => {
+    if (!icsUrl.trim()) {
+      toast.error('Please enter an ICS URL');
+      return;
+    }
+    setIsValidating(true);
+    validateICSMutation.mutate(icsUrl, {
+      onSettled: () => setIsValidating(false),
+    });
+  };
+
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
 
-    let childId = formData.get('child_id') as string;
+    if (dialogMode === 'edit' && selectedCalendar) {
+      // Edit existing calendar
+      updateCalendarMutation.mutate({
+        id: selectedCalendar,
+        data: {
+          name: formData.get('name') as string,
+          ics_url: formData.get('ics_url') as string,
+          color: formData.get('color') as string,
+        },
+      });
+    } else {
+      // Create new calendar
+      let childId = formData.get('child_id') as string;
 
-    // If creating a new child, create it first
-    if (childMode === 'new') {
-      const childName = formData.get('new_child_name') as string;
-      if (!childName) return;
+      // If creating a new child, create it first
+      if (childMode === 'new') {
+        const childName = formData.get('new_child_name') as string;
+        if (!childName) return;
 
-      try {
-        const newChild = await createChildMutation.mutateAsync({ name: childName });
-        childId = newChild.id;
-      } catch (error) {
-        console.error('Failed to create child:', error);
-        toast.error('Failed to create child');
-        return;
+        try {
+          const newChild = await createChildMutation.mutateAsync({ name: childName });
+          childId = newChild.id;
+        } catch (error) {
+          console.error('Failed to create child:', error);
+          toast.error('Failed to create child');
+          return;
+        }
       }
-    }
 
-    // Then create the calendar
-    createCalendarMutation.mutate({
-      name: formData.get('name') as string,
-      ics_url: formData.get('ics_url') as string,
-      child_id: childId,
-    });
+      createCalendarMutation.mutate({
+        name: formData.get('name') as string,
+        ics_url: icsUrl,
+        child_id: childId,
+        color: formData.get('color') as string,
+      });
+    }
+  };
+
+  const openEditDialog = (calendarId: string) => {
+    setSelectedCalendar(calendarId);
+    const calendar = calendars?.find((c) => c.id === calendarId);
+    if (calendar) {
+      setIcsUrl(calendar.ics_url);
+    }
+    setDialogMode('edit');
+  };
+
+  const openAddDialog = () => {
+    setChildMode((!children || children.length === 0) ? 'new' : 'existing');
+    setDialogMode('add');
   };
 
   if (calendarsLoading) {
@@ -115,131 +256,222 @@ function Calendars() {
             Manage your children's event calendars and sync their activities
           </p>
         </div>
-        <Button onClick={() => {
-          setChildMode((!children || children.length === 0) ? 'new' : 'existing');
-          setShowCalendarForm(true);
-        }}>
-          + Add Calendar
-        </Button>
+        <Button onClick={openAddDialog}>+ Add Calendar</Button>
       </div>
 
-      {/* Calendar Form Modal */}
-      {showCalendarForm && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-          <Card className="max-w-md w-full">
-            <CardHeader>
-              <CardTitle>Add Event Calendar</CardTitle>
-              <CardDescription>
-                Connect an ICS calendar feed to track your child's events
-              </CardDescription>
-            </CardHeader>
-            <form onSubmit={handleCreateCalendar}>
-              <CardContent className="space-y-4">
+      {/* Calendar Dialog (Add/Edit) */}
+      <Dialog open={dialogMode !== null} onOpenChange={(open) => !open && resetDialog()}>
+        <DialogContent className="sm:max-w-[500px]">
+          <DialogHeader>
+            <DialogTitle>{dialogMode === 'edit' ? 'Edit Calendar' : 'Add Event Calendar'}</DialogTitle>
+            <DialogDescription>
+              {dialogMode === 'edit'
+                ? 'Update your calendar settings'
+                : 'Connect an ICS calendar feed to track your child\'s events'}
+            </DialogDescription>
+          </DialogHeader>
+
+          {dialogMode === 'add' && validationStep === 'url' && (
+            <div className="space-y-4 py-4">
+              <div className="space-y-2">
+                <Label htmlFor="validate_ics_url">ICS Feed URL *</Label>
+                <Input
+                  id="validate_ics_url"
+                  type="url"
+                  placeholder="https://example.com/calendar.ics"
+                  value={icsUrl}
+                  onChange={(e) => setIcsUrl(e.target.value)}
+                  disabled={isValidating}
+                />
+                <p className="text-sm text-muted-foreground">
+                  Enter the URL of an ICS calendar feed to import events
+                </p>
+              </div>
+
+              {icsValidation && !icsValidation.valid && (
+                <div className="flex items-start gap-2 p-3 rounded-md bg-destructive/10 text-destructive">
+                  <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" />
+                  <div className="text-sm">
+                    <p className="font-medium">Invalid Calendar Feed</p>
+                    <p>{icsValidation.error || 'Please check the URL and try again'}</p>
+                  </div>
+                </div>
+              )}
+
+              <DialogFooter>
+                <Button type="button" variant="outline" onClick={resetDialog}>
+                  Cancel
+                </Button>
+                <Button onClick={handleValidateICS} disabled={isValidating}>
+                  {isValidating ? 'Validating...' : 'Validate Feed'}
+                </Button>
+              </DialogFooter>
+            </div>
+          )}
+
+          {((dialogMode === 'add' && validationStep === 'details' && icsValidation?.valid) || dialogMode === 'edit') && (
+            <form onSubmit={handleSubmit}>
+              <div className="space-y-4 py-4">
+                {dialogMode === 'add' && icsValidation && (
+                  <div className="flex items-start gap-2 p-3 rounded-md bg-green-50 text-green-900 dark:bg-green-900/20 dark:text-green-300">
+                    <CheckCircle2 className="h-5 w-5 shrink-0 mt-0.5" />
+                    <div className="text-sm">
+                      <p className="font-medium">Calendar Validated Successfully!</p>
+                      {icsValidation.calendar_name && <p>Name: {icsValidation.calendar_name}</p>}
+                      {icsValidation.event_count !== undefined && (
+                        <p>Events: {icsValidation.event_count}</p>
+                      )}
+                      {icsValidation.date_range && (
+                        <p>
+                          Range: {new Date(icsValidation.date_range.start).toLocaleDateString()} -{' '}
+                          {new Date(icsValidation.date_range.end).toLocaleDateString()}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 <div className="space-y-2">
                   <Label htmlFor="name">Calendar Name *</Label>
                   <Input
                     id="name"
                     name="name"
                     placeholder="Soccer Team Calendar"
+                    defaultValue={calendarToEdit?.name || icsValidation?.calendar_name || ''}
                     required
                   />
                 </div>
 
-                <div className="space-y-2">
-                  <Label htmlFor="ics_url">ICS Feed URL *</Label>
-                  <Input
-                    id="ics_url"
-                    name="ics_url"
-                    type="url"
-                    placeholder="https://example.com/calendar.ics"
-                    required
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label>Child *</Label>
-
-                  {/* Toggle between existing and new child */}
-                  <div className="flex gap-4 mb-3">
-                    <label className="flex items-center cursor-pointer">
-                      <input
-                        type="radio"
-                        name="child_mode"
-                        value="existing"
-                        checked={childMode === 'existing'}
-                        onChange={() => setChildMode('existing')}
-                        className="mr-2"
-                      />
-                      <span className="text-sm">Select existing</span>
-                    </label>
-                    <label className="flex items-center cursor-pointer">
-                      <input
-                        type="radio"
-                        name="child_mode"
-                        value="new"
-                        checked={childMode === 'new'}
-                        onChange={() => setChildMode('new')}
-                        className="mr-2"
-                      />
-                      <span className="text-sm">Create new</span>
-                    </label>
-                  </div>
-
-                  {childMode === 'existing' ? (
-                    <Select name="child_id" required={childMode === 'existing'}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select a child" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {children?.map((child) => (
-                          <SelectItem key={child.id} value={child.id}>
-                            {child.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  ) : (
+                {dialogMode === 'edit' && (
+                  <div className="space-y-2">
+                    <Label htmlFor="ics_url">ICS Feed URL *</Label>
                     <Input
-                      name="new_child_name"
-                      placeholder="Enter child's name"
-                      required={childMode === 'new'}
+                      id="ics_url"
+                      name="ics_url"
+                      type="url"
+                      placeholder="https://example.com/calendar.ics"
+                      defaultValue={calendarToEdit?.ics_url}
+                      required
                     />
-                  )}
-                </div>
-              </CardContent>
+                  </div>
+                )}
 
-              <CardFooter className="flex gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => setShowCalendarForm(false)}
-                  className="flex-1"
-                >
+                <div className="space-y-2">
+                  <Label htmlFor="color">Calendar Color</Label>
+                  <Input
+                    id="color"
+                    name="color"
+                    type="color"
+                    defaultValue={calendarToEdit?.color || '#3B82F6'}
+                  />
+                </div>
+
+                {dialogMode === 'add' && (
+                  <div className="space-y-2">
+                    <Label>Child *</Label>
+
+                    <div className="flex gap-4 mb-3">
+                      <label className="flex items-center cursor-pointer">
+                        <input
+                          type="radio"
+                          name="child_mode"
+                          value="existing"
+                          checked={childMode === 'existing'}
+                          onChange={() => setChildMode('existing')}
+                          className="mr-2"
+                        />
+                        <span className="text-sm">Select existing</span>
+                      </label>
+                      <label className="flex items-center cursor-pointer">
+                        <input
+                          type="radio"
+                          name="child_mode"
+                          value="new"
+                          checked={childMode === 'new'}
+                          onChange={() => setChildMode('new')}
+                          className="mr-2"
+                        />
+                        <span className="text-sm">Create new</span>
+                      </label>
+                    </div>
+
+                    {childMode === 'existing' ? (
+                      <Select name="child_id" required={childMode === 'existing'}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select a child" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {children?.map((child) => (
+                            <SelectItem key={child.id} value={child.id}>
+                              {child.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <Input
+                        name="new_child_name"
+                        placeholder="Enter child's name"
+                        required={childMode === 'new'}
+                      />
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <DialogFooter>
+                <Button type="button" variant="outline" onClick={resetDialog}>
                   Cancel
                 </Button>
                 <Button
                   type="submit"
-                  disabled={createCalendarMutation.isPending || createChildMutation.isPending}
-                  className="flex-1"
+                  disabled={
+                    createCalendarMutation.isPending ||
+                    createChildMutation.isPending ||
+                    updateCalendarMutation.isPending
+                  }
                 >
-                  {createCalendarMutation.isPending || createChildMutation.isPending
-                    ? 'Creating...'
+                  {createCalendarMutation.isPending ||
+                  createChildMutation.isPending ||
+                  updateCalendarMutation.isPending
+                    ? 'Saving...'
+                    : dialogMode === 'edit'
+                    ? 'Update Calendar'
                     : 'Create Calendar'}
                 </Button>
-              </CardFooter>
+              </DialogFooter>
             </form>
-          </Card>
-        </div>
-      )}
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={deleteConfirmId !== null} onOpenChange={(open) => !open && setDeleteConfirmId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Calendar?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete this calendar and all its events. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => deleteConfirmId && deleteCalendarMutation.mutate(deleteConfirmId)}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deleteCalendarMutation.isPending ? 'Deleting...' : 'Delete Calendar'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Calendars List */}
       {!calendars || calendars.length === 0 ? (
         <Card className="text-center py-12">
           <CardContent className="pt-6">
             <p className="text-muted-foreground mb-2">No calendars yet</p>
-            <p className="text-sm text-muted-foreground">
-              Click "+ Add Calendar" to get started
-            </p>
+            <p className="text-sm text-muted-foreground">Click "+ Add Calendar" to get started</p>
           </CardContent>
         </Card>
       ) : (
@@ -248,14 +480,29 @@ function Calendars() {
             <Card key={calendar.id} className="flex flex-col">
               <CardHeader>
                 <div className="flex items-start justify-between">
-                  <div className="space-y-1">
+                  <div className="space-y-1 flex-1">
                     <CardTitle className="text-lg">{calendar.name}</CardTitle>
                     <CardDescription>{calendar.child.name}</CardDescription>
                   </div>
-                  <div
-                    className="w-4 h-4 rounded-full shrink-0"
-                    style={{ backgroundColor: calendar.color }}
-                  />
+                  <div className="flex items-center gap-2">
+                    <div className="w-4 h-4 rounded-full shrink-0" style={{ backgroundColor: calendar.color }} />
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8"
+                      onClick={() => openEditDialog(calendar.id)}
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 text-destructive"
+                      onClick={() => setDeleteConfirmId(calendar.id)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
                 </div>
               </CardHeader>
 
@@ -274,14 +521,31 @@ function Calendars() {
                       {calendar.ics_url}
                     </p>
                     {calendar.last_sync_at && (
-                      <p className="text-xs mt-1">
-                        Last synced: {new Date(calendar.last_sync_at).toLocaleString('en-US', {
-                          month: 'short',
-                          day: 'numeric',
-                          hour: 'numeric',
-                          minute: '2-digit',
-                        })}
-                      </p>
+                      <div className="flex items-center justify-between mt-2">
+                        <p className="text-xs">
+                          Last synced:{' '}
+                          {new Date(calendar.last_sync_at).toLocaleString('en-US', {
+                            month: 'short',
+                            day: 'numeric',
+                            hour: 'numeric',
+                            minute: '2-digit',
+                          })}
+                        </p>
+                        {calendar.last_sync_status && (
+                          <Badge
+                            variant={
+                              calendar.last_sync_status === 'success'
+                                ? 'default'
+                                : calendar.last_sync_status === 'error'
+                                ? 'destructive'
+                                : 'secondary'
+                            }
+                            className="text-xs"
+                          >
+                            {calendar.last_sync_status}
+                          </Badge>
+                        )}
+                      </div>
                     )}
                   </div>
                 </div>
@@ -294,6 +558,7 @@ function Calendars() {
                   className="w-full"
                   variant="default"
                 >
+                  <RefreshCw className={`h-4 w-4 mr-2 ${syncCalendarMutation.isPending ? 'animate-spin' : ''}`} />
                   {syncCalendarMutation.isPending ? 'Syncing...' : 'Sync Events'}
                 </Button>
               </CardFooter>

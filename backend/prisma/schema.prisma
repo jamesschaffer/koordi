@@ -25,10 +25,10 @@ model User {
   google_calendar_id          String?  @db.VarChar(255) // Primary calendar ID
   google_calendar_sync_enabled Boolean  @default(false)
   home_address                String?  @db.Text
-  home_lat                    Decimal? @db.Decimal(10, 8)
-  home_lng                    Decimal? @db.Decimal(11, 8)
+  home_latitude               Decimal? @db.Decimal(10, 8)
+  home_longitude              Decimal? @db.Decimal(11, 8)
   comfort_buffer_minutes      Int      @default(5) // 0-60 minutes
-  supplemental_retention      Boolean  @default(false) // Keep drive times on reassignment
+  keep_supplemental_events    Boolean  @default(false) // Keep drive times on reassignment
   created_at                  DateTime @default(now()) @db.Timestamptz(6)
   updated_at                  DateTime @updatedAt @db.Timestamptz(6)
 
