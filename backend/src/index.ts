@@ -1,4 +1,5 @@
 import express from 'express';
+import { createServer } from 'http';
 import cors from 'cors';
 import helmet from 'helmet';
 import dotenv from 'dotenv';
@@ -11,10 +12,12 @@ import jobRoutes from './routes/jobs';
 import invitationRoutes from './routes/invitations';
 import './workers/icsSync.worker'; // Initialize worker
 import { initializeScheduler } from './jobs/scheduler';
+import { initializeSocketServer } from './config/socket';
 
 dotenv.config();
 
 const app = express();
+const httpServer = createServer(app);
 const PORT = process.env.PORT || 3000;
 
 // Middleware
@@ -53,14 +56,22 @@ app.use('/api/events', eventRoutes);
 app.use('/api/jobs', jobRoutes);
 app.use('/api', invitationRoutes);
 
+// Initialize Socket.IO
+const io = initializeSocketServer(httpServer);
+
+// Make io accessible to routes
+app.set('io', io);
+
 // Start server
-app.listen(PORT, () => {
+httpServer.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
   console.log(`📊 Health check: http://localhost:${PORT}/api/health`);
   console.log(`🔧 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`🔌 WebSocket server initialized`);
 
   // Initialize background job scheduler
   initializeScheduler();
 });
 
 export default app;
+export { io };

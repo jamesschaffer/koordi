@@ -189,18 +189,20 @@ export async function createSupplementalEvents(
 
   console.log(`Created supplemental events for ${event.title}: departure (${driveToEvent.duration_in_traffic_minutes}min), buffer (${bufferMinutes}min), return (${driveFromEvent.duration_in_traffic_minutes}min)`);
 
-  // Sync supplemental events to Google Calendar (async, don't block on errors)
-  syncSupplementalEventToGoogleCalendar(departureEvent.id, assignedUserId).catch((error) => {
-    console.error('Failed to sync departure event to Google Calendar:', error);
-  });
-
-  syncSupplementalEventToGoogleCalendar(bufferEvent.id, assignedUserId).catch((error) => {
-    console.error('Failed to sync buffer event to Google Calendar:', error);
-  });
-
-  syncSupplementalEventToGoogleCalendar(returnEvent.id, assignedUserId).catch((error) => {
-    console.error('Failed to sync return event to Google Calendar:', error);
-  });
+  // Sync all supplemental events to Google Calendar in parallel
+  // We await these to ensure google_event_id is set before returning
+  // This prevents race conditions when quickly unassigning events
+  await Promise.all([
+    syncSupplementalEventToGoogleCalendar(departureEvent.id, assignedUserId).catch((error) => {
+      console.error('Failed to sync departure event to Google Calendar:', error);
+    }),
+    syncSupplementalEventToGoogleCalendar(bufferEvent.id, assignedUserId).catch((error) => {
+      console.error('Failed to sync buffer event to Google Calendar:', error);
+    }),
+    syncSupplementalEventToGoogleCalendar(returnEvent.id, assignedUserId).catch((error) => {
+      console.error('Failed to sync return event to Google Calendar:', error);
+    }),
+  ]);
 
   return {
     departure: departureEvent,

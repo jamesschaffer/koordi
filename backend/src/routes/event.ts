@@ -1,6 +1,7 @@
 import express, { Request, Response } from 'express';
 import { authenticateToken } from '../middleware/auth';
 import * as eventService from '../services/eventService';
+import { SocketEvent, emitToCalendar } from '../config/socket';
 
 const router = express.Router();
 
@@ -97,6 +98,23 @@ router.patch('/:id/assign', async (req: Request, res: Response) => {
       userId,
       assigned_to_user_id
     );
+
+    // Broadcast assignment change to all calendar members via WebSocket
+    const io = req.app.get('io');
+    if (io) {
+      const socketEvent = assigned_to_user_id
+        ? SocketEvent.EVENT_ASSIGNED
+        : SocketEvent.EVENT_UNASSIGNED;
+
+      emitToCalendar(io, event.event_calendar_id, socketEvent, {
+        event_id: event.id,
+        event_title: event.title,
+        assigned_to_user_id,
+        start_time: event.start_time,
+        end_time: event.end_time,
+        event_calendar_id: event.event_calendar_id,
+      });
+    }
 
     res.json(event);
   } catch (error: any) {

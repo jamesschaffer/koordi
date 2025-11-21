@@ -1,11 +1,15 @@
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useEffect } from 'react';
+import { useSocketEvents } from '../hooks/useSocketEvents';
 
 function Layout() {
   const { user, logout, loading } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
+
+  // Enable WebSocket real-time updates
+  useSocketEvents();
 
   // Redirect to setup if user doesn't have home address
   useEffect(() => {
