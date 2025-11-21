@@ -1,5 +1,17 @@
 import { apiClient } from './api';
 
+export interface SupplementalEvent {
+  id: string;
+  parent_event_id: string;
+  type: 'departure' | 'buffer' | 'return';
+  title: string;
+  start_time: string;
+  end_time: string;
+  origin_address: string;
+  destination_address: string;
+  drive_time_minutes: number;
+}
+
 export interface Event {
   id: string;
   title: string;
@@ -24,6 +36,7 @@ export interface Event {
     email: string;
     avatar_url?: string;
   };
+  supplemental_events?: SupplementalEvent[];
 }
 
 export interface SyncResult {
@@ -81,6 +94,26 @@ export const syncCalendar = (calendarId: string, token: string) =>
   apiClient.post<SyncResult>(
     `/calendars/${calendarId}/sync`,
     {},
+    {
+      headers: { Authorization: `Bearer ${token}` },
+    }
+  );
+
+export const resolveConflict = (
+  event1Id: string,
+  event2Id: string,
+  reason: 'same_location' | 'other',
+  assignedUserId: string,
+  token: string
+) =>
+  apiClient.post<{ success: boolean; message: string }>(
+    `/events/resolve-conflict`,
+    {
+      event1_id: event1Id,
+      event2_id: event2Id,
+      reason,
+      assigned_user_id: assignedUserId,
+    },
     {
       headers: { Authorization: `Bearer ${token}` },
     }

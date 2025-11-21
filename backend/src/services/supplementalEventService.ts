@@ -223,6 +223,24 @@ export async function deleteSupplementalEvents(eventId: string): Promise<void> {
 }
 
 /**
+ * Delete specific supplemental event types for a given parent event
+ * @param eventId - The parent event ID
+ * @param types - Array of event types to delete ('departure', 'buffer', 'return')
+ */
+export async function deleteSupplementalEventsByType(
+  eventId: string,
+  types: Array<'departure' | 'buffer' | 'return'>
+): Promise<void> {
+  const deleted = await prisma.supplementalEvent.deleteMany({
+    where: {
+      parent_event_id: eventId,
+      type: { in: types },
+    },
+  });
+  console.log(`Deleted ${deleted.count} supplemental events (${types.join(', ')}) for event ${eventId}`);
+}
+
+/**
  * Get all supplemental events for a given parent event
  * @param eventId - The parent event ID
  * @returns Array of supplemental events

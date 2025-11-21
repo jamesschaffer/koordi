@@ -110,6 +110,9 @@ export enum SocketEvent {
   EVENT_UPDATED = 'event:updated',
   EVENT_DELETED = 'event:deleted',
 
+  // Conflict resolution events
+  CONFLICT_RESOLVED = 'conflict:resolved',
+
   // Calendar sync events
   CALENDAR_SYNCED = 'calendar:synced',
   CALENDAR_SYNC_FAILED = 'calendar:sync_failed',

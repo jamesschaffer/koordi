@@ -193,13 +193,21 @@ export async function syncMultipleSupplementalEvents(
  * Used when an event is reassigned or unassigned
  * @param parentEventId - The parent event ID
  * @param userId - The user who owns the Google Calendar
+ * @param types - Optional array of event types to delete. If not provided, deletes all types.
  */
 export async function deleteSupplementalEventsForParent(
   parentEventId: string,
-  userId: string
+  userId: string,
+  types?: Array<'departure' | 'buffer' | 'return'>
 ): Promise<void> {
+  const whereClause: any = { parent_event_id: parentEventId };
+
+  if (types && types.length > 0) {
+    whereClause.type = { in: types };
+  }
+
   const supplementalEvents = await prisma.supplementalEvent.findMany({
-    where: { parent_event_id: parentEventId },
+    where: whereClause,
     select: { id: true },
   });
 

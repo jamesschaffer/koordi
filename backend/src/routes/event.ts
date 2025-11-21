@@ -2,6 +2,8 @@ import express, { Request, Response } from 'express';
 import { authenticateToken } from '../middleware/auth';
 import * as eventService from '../services/eventService';
 import { SocketEvent, emitToCalendar } from '../config/socket';
+import { deleteSupplementalEventsByType } from '../services/supplementalEventService';
+import { deleteSupplementalEventsForParent } from '../services/googleCalendarSyncService';
 
 const router = express.Router();
 
@@ -157,6 +159,87 @@ router.get('/:id/conflicts', async (req: Request, res: Response) => {
       return res.status(404).json({ error: error.message });
     }
     res.status(500).json({ error: 'Failed to check conflicts' });
+  }
+});
+
+/**
+ * POST /api/events/resolve-conflict
+ * Resolve a conflict between two events
+ * Body: {
+ *   event1_id: string,
+ *   event2_id: string,
+ *   reason: 'same_location' | 'other',
+ *   assigned_user_id: string
+ * }
+ */
+router.post('/resolve-conflict', async (req: Request, res: Response) => {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const { event1_id, event2_id, reason, assigned_user_id } = req.body;
+
+    if (!event1_id || !event2_id || !reason || !assigned_user_id) {
+      return res.status(400).json({ error: 'event1_id, event2_id, reason, and assigned_user_id are required' });
+    }
+
+    // Verify user has access to both events
+    const event1 = await eventService.getEventById(event1_id, userId);
+    const event2 = await eventService.getEventById(event2_id, userId);
+
+    if (!event1 || !event2) {
+      return res.status(404).json({ error: 'One or both events not found' });
+    }
+
+    if (reason === 'same_location') {
+      // Delete return (drive-home) for event1 and departure (drive-to) for event2
+      // This allows them to stay at the same location between events
+
+      // Delete from Google Calendar FIRST (needs to query database for google_event_id)
+      try {
+        await deleteSupplementalEventsForParent(event1_id, assigned_user_id, ['return']);
+        await deleteSupplementalEventsForParent(event2_id, assigned_user_id, ['departure']);
+      } catch (error) {
+        console.error('Failed to delete from Google Calendar:', error);
+        // Continue with database deletion even if Google Calendar fails
+      }
+
+      // Then delete from database
+      await deleteSupplementalEventsByType(event1_id, ['return']);
+      await deleteSupplementalEventsByType(event2_id, ['departure']);
+
+      console.log(`Resolved same-location conflict between events ${event1_id} and ${event2_id}`);
+    }
+    // Future: handle 'other' reason types
+
+    // Broadcast conflict resolution to all calendar members via WebSocket
+    const io = req.app.get('io');
+    if (io) {
+      // Emit to both calendars in case events are from different calendars
+      emitToCalendar(io, event1.event_calendar_id, SocketEvent.CONFLICT_RESOLVED, {
+        event1_id,
+        event2_id,
+        reason,
+      });
+
+      if (event2.event_calendar_id !== event1.event_calendar_id) {
+        emitToCalendar(io, event2.event_calendar_id, SocketEvent.CONFLICT_RESOLVED, {
+          event1_id,
+          event2_id,
+          reason,
+        });
+      }
+    }
+
+    res.json({ success: true, message: 'Conflict resolved' });
+  } catch (error: any) {
+    console.error('Resolve conflict error:', error);
+    if (error.message.includes('not found') || error.message.includes('access denied')) {
+      return res.status(404).json({ error: error.message });
+    }
+    res.status(500).json({ error: 'Failed to resolve conflict' });
   }
 });
 

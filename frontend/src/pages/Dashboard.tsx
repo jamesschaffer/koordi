@@ -1,14 +1,16 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { getEvents, assignEvent, checkEventConflicts } from '../lib/api-events';
+import { getEvents, assignEvent, checkEventConflicts, resolveConflict } from '../lib/api-events';
+import type { Event } from '../lib/api-events';
 import { getCalendars } from '../lib/api-calendars';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { Calendar, MapPin, User, AlertTriangle } from 'lucide-react';
+import { Calendar, MapPin, User, AlertTriangle, X } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { useToast } from '@/hooks/use-toast';
+import { ConflictWarningDialog } from '../components/ConflictWarningDialog';
 
 function Dashboard() {
   const token = localStorage.getItem('auth_token') || '';
@@ -18,6 +20,16 @@ function Dashboard() {
   const [selectedCalendar, setSelectedCalendar] = useState<string>('all');
   const [startDate, setStartDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [endDate, setEndDate] = useState<string>('');
+  const [conflictDialog, setConflictDialog] = useState<{
+    open: boolean;
+    conflicts: Event[];
+    onConfirm: () => void;
+    assigneeName?: string;
+  }>({
+    open: false,
+    conflicts: [],
+    onConfirm: () => {},
+  });
 
   // Fetch calendars for filter dropdown
   const { data: calendars } = useQuery({
@@ -58,16 +70,55 @@ function Dashboard() {
     },
   });
 
+  // Resolve conflict mutation
+  const resolveConflictMutation = useMutation({
+    mutationFn: ({
+      event1Id,
+      event2Id,
+      reason,
+      assignedUserId,
+    }: {
+      event1Id: string;
+      event2Id: string;
+      reason: 'same_location' | 'other';
+      assignedUserId: string;
+    }) => resolveConflict(event1Id, event2Id, reason, assignedUserId, token),
+    onSuccess: async () => {
+      // Force immediate refetch to update UI with deleted supplemental events
+      await queryClient.refetchQueries({ queryKey: ['events'] });
+      toast({
+        title: 'Conflict Resolved',
+        description: 'The conflict has been cleared',
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: 'Error',
+        description: error.response?.data?.error || 'Failed to resolve conflict',
+        variant: 'destructive',
+      });
+    },
+  });
+
   // Handle assignment with conflict check
   const handleAssign = async (eventId: string, userId: string | null) => {
     if (userId) {
       try {
         const { hasConflicts, conflicts } = await checkEventConflicts(eventId, userId, token);
         if (hasConflicts) {
-          const confirmAssign = window.confirm(
-            `Warning: This assignment will create ${conflicts.length} scheduling conflict(s). Continue anyway?`
-          );
-          if (!confirmAssign) return;
+          // Find assignee name
+          const assignee = allMembers?.find((m) => m.id === userId);
+
+          // Show conflict dialog instead of window.confirm
+          setConflictDialog({
+            open: true,
+            conflicts,
+            assigneeName: assignee?.name || assignee?.email,
+            onConfirm: () => {
+              assignMutation.mutate({ eventId, userId });
+            },
+          });
+          return;
         }
       } catch (error) {
         console.error('Failed to check conflicts:', error);
@@ -85,6 +136,138 @@ function Dashboard() {
     });
     return acc;
   }, [] as Array<{ id: string; name: string; email: string }>);
+
+  // Helper function to parse arrival time from event description
+  const parseArrivalTime = (description: string | undefined, eventStartTime: string): Date | null => {
+    if (!description) return null;
+
+    // Look for "Arrival Time: HH:MM AM/PM" pattern
+    const arrivalMatch = description.match(/Arrival Time:\s*(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+    if (!arrivalMatch) return null;
+
+    let hours = parseInt(arrivalMatch[1]);
+    const minutes = parseInt(arrivalMatch[2]);
+    const meridiem = arrivalMatch[3].toUpperCase();
+
+    // Convert to 24-hour format
+    if (meridiem === 'PM' && hours !== 12) hours += 12;
+    if (meridiem === 'AM' && hours === 12) hours = 0;
+
+    // Use the event's start date
+    const eventDate = new Date(eventStartTime);
+    const arrivalTime = new Date(eventDate);
+    arrivalTime.setHours(hours, minutes, 0, 0);
+
+    return arrivalTime;
+  };
+
+  // Detect conflicts between events for the same assignee, including drive times
+  const eventsWithConflicts = useMemo(() => {
+    if (!events || events.length === 0) return [];
+
+    // Group events by assignee
+    const eventsByAssignee = events.reduce((acc, event) => {
+      if (event.assigned_to_user_id) {
+        if (!acc[event.assigned_to_user_id]) {
+          acc[event.assigned_to_user_id] = [];
+        }
+        acc[event.assigned_to_user_id].push(event);
+      }
+      return acc;
+    }, {} as Record<string, Event[]>);
+
+    // For each event, check if it conflicts with any other event for the same assignee
+    const conflicts: Record<string, string[]> = {}; // event.id -> [conflicting event ids]
+
+    Object.values(eventsByAssignee).forEach((userEvents) => {
+      for (let i = 0; i < userEvents.length; i++) {
+        for (let j = i + 1; j < userEvents.length; j++) {
+          const event1 = userEvents[i];
+          const event2 = userEvents[j];
+
+          // Calculate full time windows using actual supplemental events if they exist
+          // For assigned events: ONLY use actual supplemental events (no estimates)
+          // For unassigned events: use estimates
+
+          // Get supplemental events for both events
+          const departure1 = event1.supplemental_events?.find(e => e.type === 'departure');
+          const return1 = event1.supplemental_events?.find(e => e.type === 'return');
+          const departure2 = event2.supplemental_events?.find(e => e.type === 'departure');
+          const return2 = event2.supplemental_events?.find(e => e.type === 'return');
+
+          // For assigned events with supplemental events, only use what exists
+          // If departure event exists, use it; otherwise use buffer or main event start
+          const start1 = departure1
+            ? new Date(departure1.start_time).getTime()
+            : event1.assigned_to_user_id && event1.supplemental_events && event1.supplemental_events.length > 0
+              ? (() => {
+                  // Event is assigned but no departure (might be deleted for same-location)
+                  // Use buffer start if it exists, otherwise main event start
+                  const buffer1 = event1.supplemental_events.find(e => e.type === 'buffer');
+                  return buffer1
+                    ? new Date(buffer1.start_time).getTime()
+                    : new Date(event1.start_time).getTime();
+                })()
+              : (() => {
+                  // Event is unassigned, estimate
+                  const arrival1 = parseArrivalTime(event1.description, event1.start_time);
+                  return arrival1
+                    ? arrival1.getTime()
+                    : event1.location
+                      ? new Date(event1.start_time).getTime() - (30 * 60000)
+                      : new Date(event1.start_time).getTime();
+                })();
+
+          const start2 = departure2
+            ? new Date(departure2.start_time).getTime()
+            : event2.assigned_to_user_id && event2.supplemental_events && event2.supplemental_events.length > 0
+              ? (() => {
+                  const buffer2 = event2.supplemental_events.find(e => e.type === 'buffer');
+                  return buffer2
+                    ? new Date(buffer2.start_time).getTime()
+                    : new Date(event2.start_time).getTime();
+                })()
+              : (() => {
+                  const arrival2 = parseArrivalTime(event2.description, event2.start_time);
+                  return arrival2
+                    ? arrival2.getTime()
+                    : event2.location
+                      ? new Date(event2.start_time).getTime() - (30 * 60000)
+                      : new Date(event2.start_time).getTime();
+                })();
+
+          // If return event exists, use it; otherwise use main event end (no estimate for assigned events)
+          const end1 = return1
+            ? new Date(return1.end_time).getTime()
+            : event1.assigned_to_user_id && event1.supplemental_events && event1.supplemental_events.length > 0
+              ? new Date(event1.end_time).getTime() // No return event means same-location, use main event end
+              : event1.location
+                ? new Date(event1.end_time).getTime() + (30 * 60000) // Unassigned, estimate
+                : new Date(event1.end_time).getTime();
+
+          const end2 = return2
+            ? new Date(return2.end_time).getTime()
+            : event2.assigned_to_user_id && event2.supplemental_events && event2.supplemental_events.length > 0
+              ? new Date(event2.end_time).getTime()
+              : event2.location
+                ? new Date(event2.end_time).getTime() + (30 * 60000)
+                : new Date(event2.end_time).getTime();
+
+          // Events conflict if their full time windows overlap or touch
+          // Two time windows conflict if start1 <= end2 AND end1 >= start2
+          if (start1 <= end2 && end1 >= start2) {
+            // Mark both events as conflicting with each other
+            if (!conflicts[event1.id]) conflicts[event1.id] = [];
+            if (!conflicts[event2.id]) conflicts[event2.id] = [];
+            conflicts[event1.id].push(event2.id);
+            conflicts[event2.id].push(event1.id);
+          }
+        }
+      }
+    });
+
+    return conflicts;
+  }, [events]);
 
   const formatDateTime = (dateString: string, isAllDay: boolean) => {
     const date = new Date(dateString);
@@ -218,23 +401,40 @@ function Dashboard() {
         </Card>
       ) : (
         <div className="space-y-4">
-          {events.map((event) => (
-            <Card key={event.id} className="hover:shadow-md transition-shadow">
-              <CardContent className="pt-6">
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-3 mb-4">
-                      <div
-                        className="w-1 h-12 rounded-full shrink-0"
-                        style={{ backgroundColor: event.event_calendar.color }}
-                      />
-                      <div>
-                        <CardTitle className="text-lg">{event.title}</CardTitle>
-                        <CardDescription>
-                          {event.event_calendar.child.name} • {event.event_calendar.name}
-                        </CardDescription>
-                      </div>
-                    </div>
+          {events.map((event, index) => {
+            const hasConflict = eventsWithConflicts[event.id]?.length > 0;
+            const conflictingEventIds = eventsWithConflicts[event.id] || [];
+
+            // Find the next event in the list
+            const nextEvent = index < events.length - 1 ? events[index + 1] : null;
+            const showConflictBetween = nextEvent && conflictingEventIds.includes(nextEvent.id);
+
+            return (
+              <div key={event.id}>
+                <Card className={`hover:shadow-md transition-shadow ${hasConflict ? 'border-amber-300 border-2' : ''}`}>
+                  <CardContent className="pt-6">
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-3 mb-4">
+                          <div
+                            className="w-1 h-12 rounded-full shrink-0"
+                            style={{ backgroundColor: event.event_calendar.color }}
+                          />
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2">
+                              <CardTitle className="text-lg">{event.title}</CardTitle>
+                              {hasConflict && (
+                                <Badge variant="destructive" className="bg-amber-600">
+                                  <AlertTriangle className="w-3 h-3 mr-1" />
+                                  Conflict
+                                </Badge>
+                              )}
+                            </div>
+                            <CardDescription>
+                              {event.event_calendar.child.name} • {event.event_calendar.name}
+                            </CardDescription>
+                          </div>
+                        </div>
 
                     <div className="ml-4 space-y-2">
                       {/* Date/Time */}
@@ -307,9 +507,55 @@ function Dashboard() {
                 </div>
               </CardContent>
             </Card>
-          ))}
+
+            {/* Inline conflict warning between events */}
+            {showConflictBetween && nextEvent && (
+              <div className="flex items-center justify-center py-2 gap-2">
+                <div className="flex items-center gap-2 px-4 py-2 bg-amber-100 dark:bg-amber-950/30 border-2 border-amber-300 dark:border-amber-800 rounded-full text-sm font-medium text-amber-900 dark:text-amber-100">
+                  <AlertTriangle className="w-4 h-4" />
+                  <span>
+                    Scheduling conflict with "{nextEvent.title}" for{' '}
+                    {event.assigned_to?.email || 'this assignee'}
+                  </span>
+                </div>
+
+                {/* Clear Conflict Button */}
+                <Select
+                  onValueChange={(reason) => {
+                    if (event.assigned_to_user_id) {
+                      resolveConflictMutation.mutate({
+                        event1Id: event.id,
+                        event2Id: nextEvent.id,
+                        reason: reason as 'same_location' | 'other',
+                        assignedUserId: event.assigned_to_user_id,
+                      });
+                    }
+                  }}
+                >
+                  <SelectTrigger className="w-40 h-8 bg-white dark:bg-gray-800">
+                    <SelectValue placeholder="Clear Conflict" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="same_location">Same Location</SelectItem>
+                    <SelectItem value="other">Other</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+          </div>
+            );
+          })}
         </div>
       )}
+
+      {/* Conflict Warning Dialog */}
+      <ConflictWarningDialog
+        open={conflictDialog.open}
+        onOpenChange={(open) => setConflictDialog({ ...conflictDialog, open })}
+        conflicts={conflictDialog.conflicts}
+        onConfirm={conflictDialog.onConfirm}
+        assigneeName={conflictDialog.assigneeName}
+      />
     </div>
   );
 }

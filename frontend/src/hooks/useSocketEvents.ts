@@ -10,6 +10,7 @@ export enum SocketEvent {
   EVENT_CREATED = 'event:created',
   EVENT_UPDATED = 'event:updated',
   EVENT_DELETED = 'event:deleted',
+  CONFLICT_RESOLVED = 'conflict:resolved',
   CALENDAR_SYNCED = 'calendar:synced',
   CALENDAR_SYNC_FAILED = 'calendar:sync_failed',
   MEMBER_ADDED = 'member:added',
@@ -38,6 +39,12 @@ interface MemberAddedPayload {
   calendar_id: string;
   user_email: string;
   user_name: string;
+}
+
+interface ConflictResolvedPayload {
+  event1_id: string;
+  event2_id: string;
+  reason: 'same_location' | 'other';
 }
 
 export function useSocketEvents() {
@@ -192,6 +199,14 @@ export function useSocketEvents() {
       });
     });
 
+    // Conflict Resolved
+    socket.on(SocketEvent.CONFLICT_RESOLVED, (data: ConflictResolvedPayload) => {
+      console.log('✅ Conflict resolved:', data);
+
+      // Invalidate events query to refetch with updated supplemental events
+      queryClient.invalidateQueries({ queryKey: ['events'] });
+    });
+
     // Cleanup listeners on unmount
     return () => {
       console.log('🧹 Cleaning up WebSocket event listeners');
@@ -200,6 +215,7 @@ export function useSocketEvents() {
       socket.off(SocketEvent.EVENT_CREATED);
       socket.off(SocketEvent.EVENT_UPDATED);
       socket.off(SocketEvent.EVENT_DELETED);
+      socket.off(SocketEvent.CONFLICT_RESOLVED);
       socket.off(SocketEvent.CALENDAR_SYNCED);
       socket.off(SocketEvent.CALENDAR_SYNC_FAILED);
       socket.off(SocketEvent.MEMBER_ADDED);
