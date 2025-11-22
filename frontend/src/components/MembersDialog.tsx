@@ -60,7 +60,7 @@ export function MembersDialog({ calendarId, calendarName, isOwner, open, onOpenC
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['calendar-members', calendarId] });
       setInviteEmail('');
-      toast.success('Invitation sent!');
+      toast.success('Parent added to calendar');
     },
     onError: (error: any) => {
       toast.error('Failed to send invitation', {

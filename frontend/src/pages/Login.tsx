@@ -22,12 +22,9 @@ function Login() {
         </CardHeader>
 
         <CardContent className="space-y-6">
-          <div className="text-center">
-            <h2 className="text-2xl font-semibold mb-2">Welcome!</h2>
-            <p className="text-muted-foreground">
-              Sign in to manage your family's schedule
-            </p>
-          </div>
+          <p className="text-muted-foreground text-center mt-4">
+            Sign in to manage your family's schedule
+          </p>
 
           <Button
             onClick={handleGoogleLogin}

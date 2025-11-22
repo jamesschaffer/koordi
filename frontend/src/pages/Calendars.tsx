@@ -35,8 +35,15 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { toast } from 'sonner';
-import { Pencil, Trash2, RefreshCw, AlertCircle, CheckCircle2, Users } from 'lucide-react';
+import { Pencil, Trash2, RefreshCw, AlertCircle, CheckCircle2, Users, MoreVertical, Circle } from 'lucide-react';
 import { MembersDialog } from '../components/MembersDialog';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -485,28 +492,44 @@ function Calendars() {
               <CardHeader>
                 <div className="flex items-start justify-between">
                   <div className="space-y-1 flex-1">
-                    <CardTitle className="text-lg">{calendar.name}</CardTitle>
+                    <div className="flex items-center gap-2">
+                      <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: calendar.color }} />
+                      <CardTitle className="text-lg">{calendar.name}</CardTitle>
+                    </div>
                     <CardDescription>{calendar.child.name}</CardDescription>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <div className="w-4 h-4 rounded-full shrink-0" style={{ backgroundColor: calendar.color }} />
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8"
-                      onClick={() => openEditDialog(calendar.id)}
-                    >
-                      <Pencil className="h-4 w-4" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8 text-destructive"
-                      onClick={() => setDeleteConfirmId(calendar.id)}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" size="icon" className="h-8 w-8">
+                        <MoreVertical className="h-4 w-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-48">
+                      <DropdownMenuItem onClick={() => openEditDialog(calendar.id)}>
+                        <Pencil className="h-4 w-4 mr-2" />
+                        Edit
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onClick={() => setDeleteConfirmId(calendar.id)}
+                        className="text-destructive focus:text-destructive"
+                      >
+                        <Trash2 className="h-4 w-4 mr-2" />
+                        Delete
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onClick={() => setMembersDialogCalendarId(calendar.id)}>
+                        <Users className="h-4 w-4 mr-2" />
+                        Manage Members
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onClick={() => syncCalendarMutation.mutate(calendar.id)}
+                        disabled={syncCalendarMutation.isPending}
+                      >
+                        <RefreshCw className={`h-4 w-4 mr-2 ${syncCalendarMutation.isPending ? 'animate-spin' : ''}`} />
+                        Sync Events
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </div>
               </CardHeader>
 
@@ -516,25 +539,32 @@ function Calendars() {
                     <span>Owner:</span>
                     <span className="font-medium text-foreground">{calendar.owner.name}</span>
                   </div>
-                  <div className="flex items-center justify-between">
-                    <span>Members: {calendar.members.length}</span>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-7 text-xs"
-                      onClick={() => setMembersDialogCalendarId(calendar.id)}
-                    >
-                      <Users className="h-3 w-3 mr-1" />
-                      Manage
-                    </Button>
-                  </div>
-                  <div className="pt-2 border-t">
-                    <p className="text-xs truncate" title={calendar.ics_url}>
-                      {calendar.ics_url}
-                    </p>
-                    {calendar.last_sync_at && (
-                      <div className="flex items-center justify-between mt-2">
-                        <p className="text-xs">
+                  {calendar.members.length > 0 && (
+                    <div className="flex items-center justify-between">
+                      <span>Members:</span>
+                      <span className="font-medium text-foreground text-right">
+                        {calendar.members.map((m) => m.user.name).join(', ')}
+                      </span>
+                    </div>
+                  )}
+                  {calendar.last_sync_at && (
+                    <div className="pt-2 border-t">
+                      <div className="flex items-center gap-2">
+                        <div
+                          className="w-2 h-2 rounded-full shrink-0"
+                          style={{
+                            backgroundColor:
+                              calendar.last_sync_status === 'success'
+                                ? '#22c55e'
+                                : calendar.last_sync_status === 'error'
+                                ? '#ef4444'
+                                : '#22c55e'
+                          }}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          {calendar.last_sync_status === 'error' && (
+                            <span className="text-destructive mr-1">Error -</span>
+                          )}
                           Last synced:{' '}
                           {new Date(calendar.last_sync_at).toLocaleString('en-US', {
                             month: 'short',
@@ -543,37 +573,11 @@ function Calendars() {
                             minute: '2-digit',
                           })}
                         </p>
-                        {calendar.last_sync_status && (
-                          <Badge
-                            variant={
-                              calendar.last_sync_status === 'success'
-                                ? 'default'
-                                : calendar.last_sync_status === 'error'
-                                ? 'destructive'
-                                : 'secondary'
-                            }
-                            className="text-xs"
-                          >
-                            {calendar.last_sync_status}
-                          </Badge>
-                        )}
                       </div>
-                    )}
-                  </div>
+                    </div>
+                  )}
                 </div>
               </CardContent>
-
-              <CardFooter>
-                <Button
-                  onClick={() => syncCalendarMutation.mutate(calendar.id)}
-                  disabled={syncCalendarMutation.isPending}
-                  className="w-full"
-                  variant="default"
-                >
-                  <RefreshCw className={`h-4 w-4 mr-2 ${syncCalendarMutation.isPending ? 'animate-spin' : ''}`} />
-                  {syncCalendarMutation.isPending ? 'Syncing...' : 'Sync Events'}
-                </Button>
-              </CardFooter>
             </Card>
           ))}
         </div>

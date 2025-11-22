@@ -10,6 +10,7 @@ interface AddressAutocompleteProps {
   value: string;
   onChange: (value: string) => void;
   onPlaceSelect: (place: { address: string; latitude: number; longitude: number }) => void;
+  onBlur?: () => void;
   label?: string;
   placeholder?: string;
   disabled?: boolean;
@@ -19,6 +20,7 @@ function AddressAutocomplete({
   value,
   onChange,
   onPlaceSelect,
+  onBlur,
   label = "Address",
   placeholder = "123 Main St, City, State ZIP",
   disabled = false,
@@ -60,6 +62,7 @@ function AddressAutocomplete({
           id="address"
           value={value}
           onChange={(e) => onChange(e.target.value)}
+          onBlur={onBlur}
           placeholder={placeholder}
           disabled={disabled}
         />
@@ -83,6 +86,7 @@ function AddressAutocomplete({
           id="address"
           value={value}
           onChange={(e) => onChange(e.target.value)}
+          onBlur={onBlur}
           placeholder={placeholder}
           disabled={disabled}
         />
@@ -124,6 +128,7 @@ function AddressAutocomplete({
           id="address"
           value={value}
           onChange={(e) => onChange(e.target.value)}
+          onBlur={onBlur}
           placeholder={placeholder}
           disabled={disabled}
         />

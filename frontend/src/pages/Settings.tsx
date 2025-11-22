@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { getMe, updateAddress, updateComfortBuffer, updateRetention, deleteAccount } from '../lib/api-users';
@@ -21,6 +21,7 @@ import {
 import { toast } from 'sonner';
 import { useAuth } from '../contexts/AuthContext';
 import AddressAutocomplete from '../components/AddressAutocomplete';
+import { CheckCircle2, Loader2 } from 'lucide-react';
 
 function Settings() {
   const queryClient = useQueryClient();
@@ -33,6 +34,8 @@ function Settings() {
   const [longitude, setLongitude] = useState<number | undefined>();
   const [comfortBuffer, setComfortBuffer] = useState<number[]>([15]);
   const [keepSupplemental, setKeepSupplemental] = useState(false);
+  const [addressSaveStatus, setAddressSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [bufferSaveStatus, setBufferSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
   // Fetch user data
   const { data: user, isLoading } = useQuery({
@@ -52,28 +55,40 @@ function Settings() {
   // Update address mutation
   const updateAddressMutation = useMutation({
     mutationFn: () => updateAddress({ address, latitude, longitude }, token),
+    onMutate: () => {
+      setAddressSaveStatus('saving');
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['user'] });
-      toast.success('Address updated successfully!');
+      setAddressSaveStatus('saved');
+      setTimeout(() => setAddressSaveStatus('idle'), 2000);
     },
     onError: (error: any) => {
-      toast.error('Failed to update address', {
+      setAddressSaveStatus('error');
+      toast.error('Failed to save address', {
         description: error.message || 'Please try again',
       });
+      setTimeout(() => setAddressSaveStatus('idle'), 3000);
     },
   });
 
   // Update comfort buffer mutation
   const updateComfortBufferMutation = useMutation({
     mutationFn: (minutes: number) => updateComfortBuffer(minutes, token),
+    onMutate: () => {
+      setBufferSaveStatus('saving');
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['user'] });
-      toast.success('Comfort buffer updated!');
+      setBufferSaveStatus('saved');
+      setTimeout(() => setBufferSaveStatus('idle'), 2000);
     },
     onError: (error: any) => {
-      toast.error('Failed to update comfort buffer', {
+      setBufferSaveStatus('error');
+      toast.error('Failed to save comfort buffer', {
         description: error.message || 'Please try again',
       });
+      setTimeout(() => setBufferSaveStatus('idle'), 3000);
     },
   });
 
@@ -106,23 +121,33 @@ function Settings() {
     },
   });
 
-  const handleSaveAddress = () => {
+  const saveAddress = useCallback(() => {
     if (!address.trim()) {
-      toast.error('Please enter an address');
       return;
     }
-    if (!latitude || !longitude) {
-      toast.warning('Address not validated', {
-        description: 'Please select an address from the autocomplete suggestions for best results',
-      });
-    }
     updateAddressMutation.mutate();
-  };
+  }, [address, latitude, longitude, updateAddressMutation]);
 
   const handlePlaceSelect = (place: { address: string; latitude: number; longitude: number }) => {
     setAddress(place.address);
     setLatitude(place.latitude);
     setLongitude(place.longitude);
+    // Auto-save when a place is selected from autocomplete
+    setTimeout(() => {
+      updateAddressMutation.mutate();
+    }, 100);
+  };
+
+  const handleAddressBlur = () => {
+    // Auto-save on blur if address has changed
+    if (address && address !== user?.home_address) {
+      if (!latitude || !longitude) {
+        toast.warning('Address not validated', {
+          description: 'Select from suggestions for accurate location',
+        });
+      }
+      saveAddress();
+    }
   };
 
   const handleComfortBufferChange = (value: number[]) => {
@@ -178,31 +203,54 @@ function Settings() {
       {/* Home Address Section */}
       <Card>
         <CardHeader>
-          <CardTitle>Home Address</CardTitle>
+          <CardTitle className="flex items-center justify-between">
+            <span>Home Address</span>
+            {addressSaveStatus === 'saving' && (
+              <span className="text-sm font-normal text-muted-foreground flex items-center gap-1">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                Saving...
+              </span>
+            )}
+            {addressSaveStatus === 'saved' && (
+              <span className="text-sm font-normal text-green-600 flex items-center gap-1">
+                <CheckCircle2 className="h-3 w-3" />
+                Saved
+              </span>
+            )}
+          </CardTitle>
           <CardDescription>
             Used to calculate drive times and departure times for events
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent>
           <AddressAutocomplete
             value={address}
             onChange={setAddress}
             onPlaceSelect={handlePlaceSelect}
-            disabled={updateAddressMutation.isPending}
+            onBlur={handleAddressBlur}
+            disabled={addressSaveStatus === 'saving'}
           />
-          <Button
-            onClick={handleSaveAddress}
-            disabled={updateAddressMutation.isPending}
-          >
-            {updateAddressMutation.isPending ? 'Saving...' : 'Save Address'}
-          </Button>
         </CardContent>
       </Card>
 
       {/* Comfort Buffer Section */}
       <Card>
         <CardHeader>
-          <CardTitle>Comfort Buffer</CardTitle>
+          <CardTitle className="flex items-center justify-between">
+            <span>Comfort Buffer</span>
+            {bufferSaveStatus === 'saving' && (
+              <span className="text-sm font-normal text-muted-foreground flex items-center gap-1">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                Saving...
+              </span>
+            )}
+            {bufferSaveStatus === 'saved' && (
+              <span className="text-sm font-normal text-green-600 flex items-center gap-1">
+                <CheckCircle2 className="h-3 w-3" />
+                Saved
+              </span>
+            )}
+          </CardTitle>
           <CardDescription>
             Extra time to add before events (0-60 minutes)
           </CardDescription>
