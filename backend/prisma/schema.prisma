@@ -146,6 +146,7 @@ model Event {
   end_time              DateTime  @db.Timestamptz(6)
   is_all_day            Boolean   @default(false)
   assigned_to_user_id   String?   @db.Uuid
+  version               Int       @default(1) // Optimistic locking: increments on each assignment change
   google_event_id       String?   @db.VarChar(255) // Google Calendar event ID
   last_modified         DateTime  @default(now()) @db.Timestamptz(6) // From ICS or update timestamp
   created_at            DateTime  @default(now()) @db.Timestamptz(6)

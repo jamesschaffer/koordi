@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getEvents, assignEvent, checkEventConflicts, resolveConflict } from '../lib/api-events';
-import type { Event } from '../lib/api-events';
+import type { Event, ConcurrentModificationError } from '../lib/api-events';
 import { getCalendars } from '../lib/api-calendars';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -11,6 +11,16 @@ import { Calendar, MapPin, User, AlertTriangle, X } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { useToast } from '@/hooks/use-toast';
 import { ConflictWarningDialog } from '../components/ConflictWarningDialog';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 
 function Dashboard() {
   const token = localStorage.getItem('auth_token') || '';
@@ -31,6 +41,13 @@ function Dashboard() {
     onConfirm: () => {},
   });
 
+  // State for version conflict (optimistic locking)
+  const [versionConflict, setVersionConflict] = useState<{
+    eventId: string;
+    eventTitle: string;
+    currentState: ConcurrentModificationError['details']['current_state'];
+  } | null>(null);
+
   // Fetch calendars for filter dropdown
   const { data: calendars } = useQuery({
     queryKey: ['calendars'],
@@ -50,10 +67,14 @@ function Dashboard() {
       }),
   });
 
-  // Assignment mutation
+  // Assignment mutation with optimistic locking
   const assignMutation = useMutation({
-    mutationFn: ({ eventId, userId }: { eventId: string; userId: string | null }) =>
-      assignEvent(eventId, userId, token),
+    mutationFn: ({ eventId, userId, expectedVersion }: {
+      eventId: string;
+      userId: string | null;
+      expectedVersion: number;
+    }) =>
+      assignEvent(eventId, userId, expectedVersion, token),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['events'] });
       toast({
@@ -62,11 +83,21 @@ function Dashboard() {
       });
     },
     onError: (error: any) => {
-      toast({
-        title: 'Error',
-        description: error.response?.data?.error || 'Failed to assign event',
-        variant: 'destructive',
-      });
+      // Handle concurrent modification (HTTP 409)
+      if (error.response?.status === 409 && error.response?.data?.code === 'CONCURRENT_MODIFICATION') {
+        const conflictData = error.response.data as ConcurrentModificationError;
+        setVersionConflict({
+          eventId: conflictData.details.current_state.id,
+          eventTitle: conflictData.details.current_state.title,
+          currentState: conflictData.details.current_state,
+        });
+      } else {
+        toast({
+          title: 'Error',
+          description: error.response?.data?.error || 'Failed to assign event',
+          variant: 'destructive',
+        });
+      }
     },
   });
 
@@ -100,8 +131,19 @@ function Dashboard() {
     },
   });
 
-  // Handle assignment with conflict check
+  // Handle assignment with conflict check and optimistic locking
   const handleAssign = async (eventId: string, userId: string | null) => {
+    // Find the event to get its version
+    const event = events?.find((e) => e.id === eventId);
+    if (!event) {
+      toast({
+        title: 'Error',
+        description: 'Event not found',
+        variant: 'destructive',
+      });
+      return;
+    }
+
     if (userId) {
       try {
         const { hasConflicts, conflicts } = await checkEventConflicts(eventId, userId, token);
@@ -115,7 +157,7 @@ function Dashboard() {
             conflicts,
             assigneeName: assignee?.name || assignee?.email,
             onConfirm: () => {
-              assignMutation.mutate({ eventId, userId });
+              assignMutation.mutate({ eventId, userId, expectedVersion: event.version });
             },
           });
           return;
@@ -124,7 +166,7 @@ function Dashboard() {
         console.error('Failed to check conflicts:', error);
       }
     }
-    assignMutation.mutate({ eventId, userId });
+    assignMutation.mutate({ eventId, userId, expectedVersion: event.version });
   };
 
   // Get unique members from all calendars
@@ -185,73 +227,63 @@ function Dashboard() {
           const event1 = userEvents[i];
           const event2 = userEvents[j];
 
-          // Calculate full time windows using actual supplemental events if they exist
-          // For assigned events: ONLY use actual supplemental events (no estimates)
-          // For unassigned events: use estimates
+          // Calculate full time windows using supplemental events
+          // Backend always returns supplemental events (no privacy filtering for conflict detection)
 
           // Get supplemental events for both events
           const departure1 = event1.supplemental_events?.find(e => e.type === 'departure');
+          const buffer1 = event1.supplemental_events?.find(e => e.type === 'buffer');
           const return1 = event1.supplemental_events?.find(e => e.type === 'return');
           const departure2 = event2.supplemental_events?.find(e => e.type === 'departure');
+          const buffer2 = event2.supplemental_events?.find(e => e.type === 'buffer');
           const return2 = event2.supplemental_events?.find(e => e.type === 'return');
 
-          // For assigned events with supplemental events, only use what exists
-          // If departure event exists, use it; otherwise use buffer or main event start
+          // Calculate effective start time:
+          // 1. Use departure supplemental event if it exists
+          // 2. Use buffer supplemental event if it exists
+          // 3. For unassigned events with location, estimate drive time
+          // 4. Otherwise use main event start time
           const start1 = departure1
             ? new Date(departure1.start_time).getTime()
-            : event1.assigned_to_user_id && event1.supplemental_events && event1.supplemental_events.length > 0
-              ? (() => {
-                  // Event is assigned but no departure (might be deleted for same-location)
-                  // Use buffer start if it exists, otherwise main event start
-                  const buffer1 = event1.supplemental_events.find(e => e.type === 'buffer');
-                  return buffer1
-                    ? new Date(buffer1.start_time).getTime()
-                    : new Date(event1.start_time).getTime();
-                })()
-              : (() => {
-                  // Event is unassigned, estimate
-                  const arrival1 = parseArrivalTime(event1.description, event1.start_time);
-                  return arrival1
-                    ? arrival1.getTime()
-                    : event1.location
-                      ? new Date(event1.start_time).getTime() - (30 * 60000)
-                      : new Date(event1.start_time).getTime();
-                })();
+            : buffer1
+              ? new Date(buffer1.start_time).getTime()
+              : !event1.assigned_to_user_id && event1.location
+                ? (() => {
+                    const arrival1 = parseArrivalTime(event1.description, event1.start_time);
+                    return arrival1
+                      ? arrival1.getTime()
+                      : new Date(event1.start_time).getTime() - (30 * 60000);
+                  })()
+                : new Date(event1.start_time).getTime();
 
           const start2 = departure2
             ? new Date(departure2.start_time).getTime()
-            : event2.assigned_to_user_id && event2.supplemental_events && event2.supplemental_events.length > 0
-              ? (() => {
-                  const buffer2 = event2.supplemental_events.find(e => e.type === 'buffer');
-                  return buffer2
-                    ? new Date(buffer2.start_time).getTime()
-                    : new Date(event2.start_time).getTime();
-                })()
-              : (() => {
-                  const arrival2 = parseArrivalTime(event2.description, event2.start_time);
-                  return arrival2
-                    ? arrival2.getTime()
-                    : event2.location
-                      ? new Date(event2.start_time).getTime() - (30 * 60000)
-                      : new Date(event2.start_time).getTime();
-                })();
+            : buffer2
+              ? new Date(buffer2.start_time).getTime()
+              : !event2.assigned_to_user_id && event2.location
+                ? (() => {
+                    const arrival2 = parseArrivalTime(event2.description, event2.start_time);
+                    return arrival2
+                      ? arrival2.getTime()
+                      : new Date(event2.start_time).getTime() - (30 * 60000);
+                  })()
+                : new Date(event2.start_time).getTime();
 
-          // If return event exists, use it; otherwise use main event end (no estimate for assigned events)
+          // Calculate effective end time:
+          // 1. Use return supplemental event if it exists
+          // 2. For unassigned events with location, estimate drive time
+          // 3. Otherwise use main event end time
           const end1 = return1
             ? new Date(return1.end_time).getTime()
-            : event1.assigned_to_user_id && event1.supplemental_events && event1.supplemental_events.length > 0
-              ? new Date(event1.end_time).getTime() // No return event means same-location, use main event end
-              : event1.location
-                ? new Date(event1.end_time).getTime() + (30 * 60000) // Unassigned, estimate
-                : new Date(event1.end_time).getTime();
+            : !event1.assigned_to_user_id && event1.location
+              ? new Date(event1.end_time).getTime() + (30 * 60000)
+              : new Date(event1.end_time).getTime();
 
           const end2 = return2
             ? new Date(return2.end_time).getTime()
-            : event2.assigned_to_user_id && event2.supplemental_events && event2.supplemental_events.length > 0
-              ? new Date(event2.end_time).getTime()
-              : event2.location
-                ? new Date(event2.end_time).getTime() + (30 * 60000)
-                : new Date(event2.end_time).getTime();
+            : !event2.assigned_to_user_id && event2.location
+              ? new Date(event2.end_time).getTime() + (30 * 60000)
+              : new Date(event2.end_time).getTime();
 
           // Events conflict if their full time windows overlap or touch
           // Two time windows conflict if start1 <= end2 AND end1 >= start2
@@ -556,6 +588,52 @@ function Dashboard() {
         onConfirm={conflictDialog.onConfirm}
         assigneeName={conflictDialog.assigneeName}
       />
+
+      {/* Version Conflict Dialog (Optimistic Locking) */}
+      <AlertDialog open={!!versionConflict} onOpenChange={() => setVersionConflict(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-amber-600" />
+              Event Was Modified
+            </AlertDialogTitle>
+            <AlertDialogDescription className="space-y-3">
+              <p>
+                The event "{versionConflict?.eventTitle}" has been modified by another user since you last viewed it.
+              </p>
+              {versionConflict?.currentState.assigned_to ? (
+                <div className="p-3 bg-muted rounded-md">
+                  <p className="font-medium text-sm text-foreground mb-1">Current Assignment:</p>
+                  <p className="text-sm">
+                    Assigned to: <span className="font-medium">{versionConflict.currentState.assigned_to.name}</span>
+                    {' '}({versionConflict.currentState.assigned_to.email})
+                  </p>
+                </div>
+              ) : (
+                <div className="p-3 bg-muted rounded-md">
+                  <p className="text-sm">The event is currently <span className="font-medium">unassigned</span>.</p>
+                </div>
+              )}
+              <p className="text-sm">
+                Please refresh the event list to see the latest changes and try again.
+              </p>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setVersionConflict(null)}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                setVersionConflict(null);
+                queryClient.invalidateQueries({ queryKey: ['events'] });
+              }}
+            >
+              Refresh Events
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

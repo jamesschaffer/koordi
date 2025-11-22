@@ -4,6 +4,7 @@ import * as eventService from '../services/eventService';
 import { SocketEvent, emitToCalendar } from '../config/socket';
 import { deleteSupplementalEventsByType } from '../services/supplementalEventService';
 import { deleteSupplementalEventsForParent } from '../services/googleCalendarSyncService';
+import { ConcurrentModificationError } from '../errors/ConcurrentModificationError';
 
 const router = express.Router();
 
@@ -88,8 +89,11 @@ router.get('/:id', async (req: Request, res: Response) => {
 
 /**
  * PATCH /api/events/:id/assign
- * Assign or unassign an event
- * Body: { assigned_to_user_id: string | null }
+ * Assign or unassign an event with optimistic locking
+ * Body: {
+ *   assigned_to_user_id: string | null,
+ *   expected_version?: number  // Optional version for race condition protection
+ * }
  */
 router.patch('/:id/assign', async (req: Request, res: Response) => {
   try {
@@ -98,12 +102,13 @@ router.patch('/:id/assign', async (req: Request, res: Response) => {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    const { assigned_to_user_id } = req.body;
+    const { assigned_to_user_id, expected_version } = req.body;
 
     const event = await eventService.assignEvent(
       req.params.id,
       userId,
-      assigned_to_user_id
+      assigned_to_user_id,
+      expected_version // Pass version for optimistic locking
     );
 
     // Broadcast assignment change to all calendar members via WebSocket
@@ -126,6 +131,21 @@ router.patch('/:id/assign', async (req: Request, res: Response) => {
     res.json(event);
   } catch (error: any) {
     console.error('Assign event error:', error);
+
+    // Handle concurrent modification (optimistic locking failure)
+    if (error instanceof ConcurrentModificationError) {
+      return res.status(409).json({  // HTTP 409 Conflict
+        error: 'Event was modified by another user',
+        code: 'CONCURRENT_MODIFICATION',
+        details: {
+          expected_version: error.expectedVersion,
+          actual_version: error.actualVersion,
+          current_state: error.currentState,
+        },
+        message: 'The event has been updated since you last viewed it. Please refresh and try again.',
+      });
+    }
+
     if (error.message.includes('not found') || error.message.includes('access denied')) {
       return res.status(404).json({ error: error.message });
     }

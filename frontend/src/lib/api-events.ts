@@ -21,6 +21,8 @@ export interface Event {
   end_time: string;
   is_all_day: boolean;
   assigned_to_user_id?: string;
+  version: number; // For optimistic locking
+  keep_supplemental_events?: boolean; // User's preference for showing supplemental events on calendar
   event_calendar: {
     id: string;
     name: string;
@@ -37,6 +39,26 @@ export interface Event {
     avatar_url?: string;
   };
   supplemental_events?: SupplementalEvent[];
+}
+
+export interface ConcurrentModificationError {
+  error: string;
+  code: 'CONCURRENT_MODIFICATION';
+  details: {
+    expected_version: number;
+    actual_version: number;
+    current_state: {
+      id: string;
+      title: string;
+      assigned_to_user_id?: string;
+      assigned_to?: {
+        id: string;
+        name: string;
+        email: string;
+      };
+    };
+  };
+  message: string;
 }
 
 export interface SyncResult {
@@ -73,10 +95,18 @@ export const getEvent = (id: string, token: string) =>
     headers: { Authorization: `Bearer ${token}` },
   });
 
-export const assignEvent = (id: string, assignedToUserId: string | null, token: string) =>
+export const assignEvent = (
+  id: string,
+  assignedToUserId: string | null,
+  expectedVersion: number,
+  token: string
+) =>
   apiClient.patch<Event>(
     `/events/${id}/assign`,
-    { assigned_to_user_id: assignedToUserId },
+    {
+      assigned_to_user_id: assignedToUserId,
+      expected_version: expectedVersion,
+    },
     {
       headers: { Authorization: `Bearer ${token}` },
     }

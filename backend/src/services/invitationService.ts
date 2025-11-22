@@ -182,6 +182,21 @@ export async function sendInvitation(
     },
   });
 
+  // If user exists, check if they're already a member (by user_id, not just invited_email)
+  if (existingUser) {
+    const existingMembership = await prisma.eventCalendarMembership.findFirst({
+      where: {
+        event_calendar_id: calendarId,
+        user_id: existingUser.id,
+        status: 'accepted',
+      },
+    });
+
+    if (existingMembership) {
+      throw new Error('This user is already a member of this calendar');
+    }
+  }
+
   // Generate invitation token
   const invitationToken = generateInvitationToken();
 
@@ -601,10 +616,10 @@ export async function removeMember(membershipId: string, userId: string) {
 
   let reassignedEventIds: string[] = [];
 
-  // Reassign member's events to calendar owner before removing
+  // Find all events assigned to this member (before transaction)
+  let assignedEvents: { id: string; title: string; }[] = [];
   if (membership.user_id) {
-    // Find all events assigned to this member in this calendar
-    const assignedEvents = await prisma.event.findMany({
+    assignedEvents = await prisma.event.findMany({
       where: {
         event_calendar_id: membership.event_calendar_id,
         assigned_to_user_id: membership.user_id,
@@ -617,20 +632,26 @@ export async function removeMember(membershipId: string, userId: string) {
 
     if (assignedEvents.length > 0) {
       console.log(`Reassigning ${assignedEvents.length} events from ${membership.user?.email} to calendar owner ${membership.event_calendar.owner.name}`);
-
       reassignedEventIds = assignedEvents.map(e => e.id);
+    }
+  }
 
-      // Delete all supplemental events for these events (they're personalized for the removed user)
-      await prisma.supplementalEvent.deleteMany({
+  // Perform all database operations atomically within a transaction
+  await prisma.$transaction(async (tx) => {
+    // Step 1: Delete supplemental events for reassigned events
+    if (reassignedEventIds.length > 0) {
+      await tx.supplementalEvent.deleteMany({
         where: {
           parent_event_id: {
             in: reassignedEventIds,
           },
         },
       });
+    }
 
-      // Reassign events to calendar owner
-      await prisma.event.updateMany({
+    // Step 2: Reassign events to calendar owner
+    if (membership.user_id && reassignedEventIds.length > 0) {
+      await tx.event.updateMany({
         where: {
           event_calendar_id: membership.event_calendar_id,
           assigned_to_user_id: membership.user_id,
@@ -639,15 +660,17 @@ export async function removeMember(membershipId: string, userId: string) {
           assigned_to_user_id: membership.event_calendar.owner_id,
         },
       });
-
-      console.log(`Reassigned events: ${assignedEvents.map(e => e.title).join(', ')}`);
     }
-  }
 
-  // Delete the membership
-  await prisma.eventCalendarMembership.delete({
-    where: { id: membershipId },
+    // Step 3: Delete the membership
+    await tx.eventCalendarMembership.delete({
+      where: { id: membershipId },
+    });
   });
+
+  if (reassignedEventIds.length > 0) {
+    console.log(`Reassigned events: ${assignedEvents.map(e => e.title).join(', ')}`);
+  }
 
   console.log(`Removed ${membership.user?.email} from calendar ${membership.event_calendar.name}`);
 
@@ -725,6 +748,9 @@ export async function autoAcceptPendingInvitations(userId: string, email: string
       event_calendar: {
         include: {
           child: true,
+          members: {
+            where: { status: 'accepted' },
+          },
         },
       },
     },
@@ -734,25 +760,39 @@ export async function autoAcceptPendingInvitations(userId: string, email: string
     return 0;
   }
 
-  // Auto-accept all pending invitations
-  await prisma.eventCalendarMembership.updateMany({
-    where: {
-      invited_email: email,
-      status: 'pending',
-    },
-    data: {
-      user_id: userId,
-      status: 'accepted',
-      responded_at: new Date(),
-    },
-  });
+  // Accept invitations one by one, checking member limits for each calendar
+  let acceptedCount = 0;
+  const skippedInvitations: string[] = [];
 
-  console.log(`Auto-accepted ${pendingInvitations.length} pending invitation(s) for ${email}`);
+  for (const invitation of pendingInvitations) {
+    const currentMemberCount = invitation.event_calendar.members.length;
 
-  // Log each calendar they were added to
-  pendingInvitations.forEach((inv) => {
-    console.log(`  - ${inv.event_calendar.name} (${inv.event_calendar.child.name})`);
-  });
+    // Check if calendar has reached member limit
+    if (currentMemberCount >= MAX_MEMBERS_PER_CALENDAR) {
+      console.log(`  ✗ Skipped ${invitation.event_calendar.name}: at capacity (${currentMemberCount}/${MAX_MEMBERS_PER_CALENDAR} members)`);
+      skippedInvitations.push(invitation.event_calendar.name);
+      continue;
+    }
 
-  return pendingInvitations.length;
+    // Accept the invitation
+    await prisma.eventCalendarMembership.update({
+      where: { id: invitation.id },
+      data: {
+        user_id: userId,
+        status: 'accepted',
+        responded_at: new Date(),
+      },
+    });
+
+    acceptedCount++;
+    console.log(`  ✓ ${invitation.event_calendar.name} (${invitation.event_calendar.child.name})`);
+  }
+
+  console.log(`Auto-accepted ${acceptedCount}/${pendingInvitations.length} pending invitation(s) for ${email}`);
+
+  if (skippedInvitations.length > 0) {
+    console.log(`  Skipped ${skippedInvitations.length} invitation(s) due to member limits: ${skippedInvitations.join(', ')}`);
+  }
+
+  return acceptedCount;
 }

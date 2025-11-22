@@ -65,6 +65,25 @@ router.post('/event-calendars/:calendarId/invitations', authenticateToken, async
 
     const invitation = await sendInvitation(calendarId, email, userId);
 
+    // Broadcast WebSocket event
+    const io = req.app.get('io');
+    if (io) {
+      if (invitation.status === 'accepted') {
+        // Existing user was added directly - broadcast MEMBER_ADDED
+        emitToCalendar(io, calendarId, SocketEvent.MEMBER_ADDED, {
+          calendar_id: calendarId,
+          user_id: invitation.user_id,
+          user_email: invitation.invited_email,
+        });
+      } else if (invitation.status === 'pending') {
+        // Pending invitation created - broadcast INVITATION_RECEIVED
+        emitToCalendar(io, calendarId, SocketEvent.INVITATION_RECEIVED, {
+          calendar_id: calendarId,
+          invited_email: invitation.invited_email,
+        });
+      }
+    }
+
     res.status(201).json(invitation);
   } catch (error) {
     console.error('Send invitation error:', error);

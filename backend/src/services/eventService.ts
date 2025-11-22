@@ -2,6 +2,7 @@ import { PrismaClient } from '@prisma/client';
 import { handleEventReassignment } from './supplementalEventService';
 import { syncMainEventToGoogleCalendar, deleteMainEventFromGoogleCalendar } from './mainEventGoogleCalendarSync';
 import { syncMainEventToAllMembers, deleteMainEventFromAllMembers } from './multiUserSyncService';
+import { ConcurrentModificationError } from '../errors/ConcurrentModificationError';
 
 const prisma = new PrismaClient();
 
@@ -79,24 +80,21 @@ export const getUserEvents = async (userId: string, filters?: {
     },
   });
 
-  // Filter supplemental events based on visibility rules:
-  // 1. If event is assigned to current user: always show supplemental events
-  // 2. If user has keep_supplemental_events enabled: show all supplemental events
-  // 3. Otherwise: don't show supplemental events
+  // Always return supplemental events for conflict detection
+  // The keep_supplemental_events setting is handled in the frontend for display purposes only
   console.log(`[getUserEvents] Found ${events.length} events for user ${userId}`);
   console.log(`[getUserEvents] keep_supplemental_events: ${keepSupplementalEvents}`);
 
   const result = events.map((event) => {
-    const shouldShowSupplementalEvents =
-      event.assigned_to_user_id === userId || keepSupplementalEvents;
-
     console.log(`[getUserEvents] Event "${event.title}": assigned_to=${event.assigned_to_user_id}, ` +
-      `supplemental_count=${event.supplemental_events.length}, ` +
-      `will_show_supplemental=${shouldShowSupplementalEvents}`);
+      `supplemental_count=${event.supplemental_events.length}`);
 
+    // Always include supplemental events for conflict detection
+    // Frontend will handle visibility based on user preferences
     return {
       ...event,
-      supplemental_events: shouldShowSupplementalEvents ? event.supplemental_events : [],
+      supplemental_events: event.supplemental_events,
+      keep_supplemental_events: keepSupplementalEvents, // Pass setting to frontend
     };
   });
 
@@ -175,12 +173,17 @@ export const getEventById = async (eventId: string, userId: string) => {
 };
 
 /**
- * Assign an event to a user
+ * Assign an event to a user with optimistic locking
+ * @param eventId - The event ID to assign
+ * @param userId - The user making the assignment (for access control)
+ * @param assignToUserId - The user to assign the event to (null to unassign)
+ * @param expectedVersion - Optional version number for optimistic locking (prevents race conditions)
  */
 export const assignEvent = async (
   eventId: string,
   userId: string,
-  assignToUserId: string | null
+  assignToUserId: string | null,
+  expectedVersion?: number
 ) => {
   // Verify user has access to this event
   const event = await getEventById(eventId, userId);
@@ -188,14 +191,37 @@ export const assignEvent = async (
     throw new Error('Event not found or access denied');
   }
 
+  // Optimistic locking: Pre-check version if provided (fail fast)
+  if (expectedVersion !== undefined && event.version !== expectedVersion) {
+    throw new ConcurrentModificationError(
+      'Event',
+      eventId,
+      expectedVersion,
+      event.version,
+      {
+        id: event.id,
+        title: event.title,
+        assigned_to_user_id: event.assigned_to_user_id,
+        assigned_to: event.assigned_to,
+      }
+    );
+  }
+
   // Get previous assignment for Google Calendar cleanup
   const previousAssignedUserId = event.assigned_to_user_id;
 
-  // Update assignment
+  // Use the current version for the atomic update (if expectedVersion not provided)
+  const versionForUpdate = expectedVersion !== undefined ? expectedVersion : event.version;
+
+  // Update assignment with optimistic locking (atomic check-and-set)
   const updatedEvent = await prisma.event.update({
-    where: { id: eventId },
+    where: {
+      id: eventId,
+      version: versionForUpdate, // Atomic: only update if version matches
+    },
     data: {
       assigned_to_user_id: assignToUserId,
+      version: { increment: 1 }, // Atomic version increment
     },
     include: {
       event_calendar: {
