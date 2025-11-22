@@ -5,6 +5,10 @@ import {
   syncSupplementalEventToGoogleCalendar,
   deleteSupplementalEventsForParent,
 } from './googleCalendarSyncService';
+import {
+  syncSupplementalEventToOptInMembers,
+  deleteSupplementalEventFromOptInMembers,
+} from './multiUserSyncService';
 
 const prisma = new PrismaClient();
 
@@ -189,7 +193,7 @@ export async function createSupplementalEvents(
 
   console.log(`Created supplemental events for ${event.title}: departure (${driveToEvent.duration_in_traffic_minutes}min), buffer (${bufferMinutes}min), return (${driveFromEvent.duration_in_traffic_minutes}min)`);
 
-  // Sync all supplemental events to Google Calendar in parallel
+  // Sync all supplemental events to the assigned user's Google Calendar
   // We await these to ensure google_event_id is set before returning
   // This prevents race conditions when quickly unassigning events
   await Promise.all([
@@ -204,6 +208,20 @@ export async function createSupplementalEvents(
     }),
   ]);
 
+  // Also sync to non-assigned members who have keep_supplemental_events enabled
+  // This runs in the background and doesn't block the return
+  Promise.all([
+    syncSupplementalEventToOptInMembers(departureEvent.id, assignedUserId).catch((error) => {
+      console.error('Failed to sync departure event to opt-in members:', error);
+    }),
+    syncSupplementalEventToOptInMembers(bufferEvent.id, assignedUserId).catch((error) => {
+      console.error('Failed to sync buffer event to opt-in members:', error);
+    }),
+    syncSupplementalEventToOptInMembers(returnEvent.id, assignedUserId).catch((error) => {
+      console.error('Failed to sync return event to opt-in members:', error);
+    }),
+  ]);
+
   return {
     departure: departureEvent,
     buffer: bufferEvent,
@@ -213,12 +231,30 @@ export async function createSupplementalEvents(
 
 /**
  * Delete all supplemental events for a given parent event
+ * Also deletes from all users' Google Calendars (assigned + opt-in members)
  * @param eventId - The parent event ID
  */
 export async function deleteSupplementalEvents(eventId: string): Promise<void> {
+  // Get all supplemental events for this parent event
+  const supplementalEvents = await prisma.supplementalEvent.findMany({
+    where: { parent_event_id: eventId },
+    select: { id: true },
+  });
+
+  // Delete from opt-in members' calendars first
+  await Promise.all(
+    supplementalEvents.map((se) =>
+      deleteSupplementalEventFromOptInMembers(se.id).catch((error) => {
+        console.error(`Failed to delete supplemental event ${se.id} from opt-in members:`, error);
+      })
+    )
+  );
+
+  // Delete from database (this also triggers Google Calendar deletion for assigned user via existing logic)
   await prisma.supplementalEvent.deleteMany({
     where: { parent_event_id: eventId },
   });
+
   console.log(`Deleted supplemental events for event ${eventId}`);
 }
 

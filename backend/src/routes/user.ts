@@ -7,6 +7,7 @@ import {
   updateUserComfortBuffer,
   updateUserRetention,
 } from '../services/userService';
+import { handleRetentionToggleChange } from '../services/multiUserSyncService';
 
 const router = express.Router();
 
@@ -121,6 +122,7 @@ router.patch('/me/settings/comfort-buffer', authenticateToken, async (req: Reque
 /**
  * PATCH /api/users/me/settings/retention
  * Update supplemental event retention setting
+ * Retroactively syncs/unsyncs all supplemental events
  */
 router.patch('/me/settings/retention', authenticateToken, async (req: Request, res: Response) => {
   try {
@@ -136,7 +138,14 @@ router.patch('/me/settings/retention', authenticateToken, async (req: Request, r
       return res.status(400).json({ error: 'keep_supplemental_events must be a boolean' });
     }
 
+    // Update the user's retention setting
     const updatedUser = await updateUserRetention(userId, keep_supplemental_events);
+
+    // Trigger retroactive sync/unsync of all supplemental events
+    // Run this in the background so it doesn't block the response
+    handleRetentionToggleChange(userId, keep_supplemental_events).catch((error) => {
+      console.error(`Failed to handle retention toggle change for user ${userId}:`, error);
+    });
 
     const { google_refresh_token_enc, ...safeUser } = updatedUser;
 

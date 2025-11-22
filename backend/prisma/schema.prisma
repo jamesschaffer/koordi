@@ -37,6 +37,7 @@ model User {
   event_calendar_memberships  EventCalendarMembership[]
   assigned_events             Event[]                    @relation("AssignedToUser")
   sent_invitations            EventCalendarMembership[]  @relation("InvitationSender")
+  google_event_syncs          UserGoogleEventSync[]
 
   @@index([email])
   @@map("users")
@@ -154,6 +155,7 @@ model Event {
   event_calendar        EventCalendar @relation(fields: [event_calendar_id], references: [id], onDelete: Cascade)
   assigned_to           User?         @relation("AssignedToUser", fields: [assigned_to_user_id], references: [id], onDelete: SetNull)
   supplemental_events   SupplementalEvent[]
+  user_syncs            UserGoogleEventSync[]
 
   @@unique([event_calendar_id, ics_uid]) // Prevent duplicate imports
   @@index([event_calendar_id])
@@ -190,6 +192,7 @@ model SupplementalEvent {
 
   // Relationships
   parent_event          Event     @relation(fields: [parent_event_id], references: [id], onDelete: Cascade)
+  user_syncs            UserGoogleEventSync[]
 
   @@index([parent_event_id])
   @@index([type])
@@ -241,6 +244,36 @@ model SupplementalEvent {
 // - type (departure/return filtering)
 // - start_time (dashboard queries)
 // - google_event_id (Google Calendar sync)
+
+// ============================================================================
+// USER GOOGLE EVENT SYNC ENTITY
+// ============================================================================
+// Tracks which events/supplemental events are synced to which users' Google Calendars
+// Supports multi-user event visibility (main events for all members, supplemental for opt-in)
+
+model UserGoogleEventSync {
+  id                    String    @id @default(uuid()) @db.Uuid
+  user_id               String    @db.Uuid
+  event_id              String?   @db.Uuid
+  supplemental_event_id String?   @db.Uuid
+  google_event_id       String    @db.VarChar(255) // Google Calendar event ID for this user
+  sync_type             String    @db.VarChar(20) // 'main' or 'supplemental'
+  created_at            DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime  @updatedAt @db.Timestamptz(6)
+
+  // Relationships
+  user                  User              @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  event                 Event?            @relation(fields: [event_id], references: [id], onDelete: Cascade)
+  supplemental_event    SupplementalEvent? @relation(fields: [supplemental_event_id], references: [id], onDelete: Cascade)
+
+  @@unique([user_id, event_id])
+  @@unique([user_id, supplemental_event_id])
+  @@index([user_id])
+  @@index([event_id])
+  @@index([supplemental_event_id])
+  @@index([google_event_id])
+  @@map("user_google_event_syncs")
+}
 
 // ============================================================================
 // CASCADE RULES

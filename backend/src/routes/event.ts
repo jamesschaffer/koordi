@@ -23,6 +23,9 @@ router.use(authenticateToken);
 router.get('/', async (req: Request, res: Response) => {
   try {
     const userId = req.user?.userId;
+    const userEmail = req.user?.email;
+    console.log(`[GET /api/events] Request from user: ${userEmail} (${userId})`);
+
     if (!userId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
@@ -48,6 +51,8 @@ router.get('/', async (req: Request, res: Response) => {
     if (req.query.assigned_to_me === 'true') {
       filters.assignedToMe = true;
     }
+
+    console.log(`[GET /api/events] Filters:`, JSON.stringify(filters));
 
     const events = await eventService.getUserEvents(userId, filters);
     res.json(events);
@@ -199,8 +204,8 @@ router.post('/resolve-conflict', async (req: Request, res: Response) => {
 
       // Delete from Google Calendar FIRST (needs to query database for google_event_id)
       try {
-        await deleteSupplementalEventsForParent(event1_id, assigned_user_id, ['return']);
-        await deleteSupplementalEventsForParent(event2_id, assigned_user_id, ['departure']);
+        await deleteSupplementalEventsForParent(event1_id, undefined, ['return']);
+        await deleteSupplementalEventsForParent(event2_id, undefined, ['departure']);
       } catch (error) {
         console.error('Failed to delete from Google Calendar:', error);
         // Continue with database deletion even if Google Calendar fails

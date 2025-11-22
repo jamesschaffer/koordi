@@ -94,27 +94,74 @@ export async function syncSupplementalEventToGoogleCalendar(
       };
     }
 
-    // Create event in Google Calendar
-    const response = await calendar.events.insert({
-      calendarId,
-      requestBody: eventBody,
-    });
-
-    const googleEventId = response.data.id;
-
-    if (!googleEventId) {
-      throw new Error('Failed to get Google Calendar event ID');
-    }
-
-    // Update supplemental event with Google Calendar event ID
-    await prisma.supplementalEvent.update({
-      where: { id: supplementalEventId },
-      data: {
-        google_event_id: googleEventId,
+    // Check if THIS USER already has this supplemental event synced
+    const existingSync = await prisma.userGoogleEventSync.findUnique({
+      where: {
+        user_id_supplemental_event_id: {
+          user_id: userId,
+          supplemental_event_id: supplementalEventId,
+        },
       },
     });
 
-    console.log(`Synced supplemental event ${supplementalEventId} to Google Calendar: ${googleEventId}`);
+    let googleEventId: string;
+
+    if (existingSync && existingSync.google_event_id) {
+      // Update existing event for this user
+      const response = await calendar.events.update({
+        calendarId,
+        eventId: existingSync.google_event_id,
+        requestBody: eventBody,
+      });
+
+      googleEventId = existingSync.google_event_id;
+      console.log(`Updated supplemental event ${supplementalEventId} in user ${userId}'s Google Calendar: ${googleEventId}`);
+    } else {
+      // Create new event for this user
+      const response = await calendar.events.insert({
+        calendarId,
+        requestBody: eventBody,
+      });
+
+      googleEventId = response.data.id!;
+
+      if (!googleEventId) {
+        throw new Error('Failed to get Google Calendar event ID');
+      }
+
+      // Create UserGoogleEventSync record for this user
+      await prisma.userGoogleEventSync.upsert({
+        where: {
+          user_id_supplemental_event_id: {
+            user_id: userId,
+            supplemental_event_id: supplementalEventId,
+          },
+        },
+        create: {
+          user_id: userId,
+          supplemental_event_id: supplementalEventId,
+          google_event_id: googleEventId,
+          sync_type: 'supplemental',
+        },
+        update: {
+          google_event_id: googleEventId,
+        },
+      });
+
+      // Update supplemental event with Google Calendar event ID (for backward compatibility)
+      // Only set this if it's not already set (keeps the first user's ID)
+      if (!supplementalEvent.google_event_id) {
+        await prisma.supplementalEvent.update({
+          where: { id: supplementalEventId },
+          data: {
+            google_event_id: googleEventId,
+          },
+        });
+      }
+
+      console.log(`Synced supplemental event ${supplementalEventId} to user ${userId}'s Google Calendar: ${googleEventId}`);
+    }
+
     return googleEventId;
   } catch (error) {
     console.error('Failed to sync supplemental event to Google Calendar:', error);
@@ -139,14 +186,19 @@ export async function deleteSupplementalEventFromGoogleCalendar(
   }
 
   try {
-    // Fetch the supplemental event
-    const supplementalEvent = await prisma.supplementalEvent.findUnique({
-      where: { id: supplementalEventId },
-      select: { google_event_id: true },
+    // Check if THIS USER has this supplemental event synced
+    const existingSync = await prisma.userGoogleEventSync.findUnique({
+      where: {
+        user_id_supplemental_event_id: {
+          user_id: userId,
+          supplemental_event_id: supplementalEventId,
+        },
+      },
     });
 
-    if (!supplementalEvent || !supplementalEvent.google_event_id) {
-      // Nothing to delete from Google Calendar
+    if (!existingSync || !existingSync.google_event_id) {
+      // This user doesn't have this event synced, nothing to delete
+      console.log(`User ${userId} doesn't have supplemental event ${supplementalEventId} synced, skipping deletion`);
       return;
     }
 
@@ -164,12 +216,22 @@ export async function deleteSupplementalEventFromGoogleCalendar(
     // Delete event from Google Calendar
     await calendar.events.delete({
       calendarId,
-      eventId: supplementalEvent.google_event_id,
+      eventId: existingSync.google_event_id,
     });
 
-    console.log(`Deleted supplemental event ${supplementalEventId} from Google Calendar`);
+    // Clean up the UserGoogleEventSync tracking record
+    await prisma.userGoogleEventSync.delete({
+      where: {
+        user_id_supplemental_event_id: {
+          user_id: userId,
+          supplemental_event_id: supplementalEventId,
+        },
+      },
+    });
+
+    console.log(`Deleted supplemental event ${supplementalEventId} from user ${userId}'s Google Calendar`);
   } catch (error) {
-    console.error('Failed to delete supplemental event from Google Calendar:', error);
+    console.error(`Failed to delete supplemental event ${supplementalEventId} from user ${userId}'s Google Calendar:`, error);
     // Don't throw - this is a cleanup operation
   }
 }
@@ -189,15 +251,15 @@ export async function syncMultipleSupplementalEvents(
 }
 
 /**
- * Delete multiple supplemental events from Google Calendar
+ * Delete multiple supplemental events from ALL users' Google Calendars
  * Used when an event is reassigned or unassigned
+ * Deletes from all users who have these events synced (assigned user + opt-in members)
  * @param parentEventId - The parent event ID
- * @param userId - The user who owns the Google Calendar
  * @param types - Optional array of event types to delete. If not provided, deletes all types.
  */
 export async function deleteSupplementalEventsForParent(
   parentEventId: string,
-  userId: string,
+  userId?: string,
   types?: Array<'departure' | 'buffer' | 'return'>
 ): Promise<void> {
   const whereClause: any = { parent_event_id: parentEventId };
@@ -211,7 +273,26 @@ export async function deleteSupplementalEventsForParent(
     select: { id: true },
   });
 
+  // For each supplemental event, find ALL users who have it synced
   for (const event of supplementalEvents) {
-    await deleteSupplementalEventFromGoogleCalendar(event.id, userId);
+    // Find all UserGoogleEventSync records for this supplemental event
+    const syncRecords = await prisma.userGoogleEventSync.findMany({
+      where: {
+        supplemental_event_id: event.id,
+        sync_type: 'supplemental',
+      },
+    });
+
+    console.log(`Deleting supplemental event ${event.id} from ${syncRecords.length} users' Google Calendars`);
+
+    // Delete from each user's Google Calendar
+    for (const syncRecord of syncRecords) {
+      try {
+        await deleteSupplementalEventFromGoogleCalendar(event.id, syncRecord.user_id);
+      } catch (error) {
+        console.error(`Failed to delete supplemental event ${event.id} from user ${syncRecord.user_id}:`, error);
+        // Continue with other deletions even if one fails
+      }
+    }
   }
 }

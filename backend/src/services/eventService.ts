@@ -1,6 +1,7 @@
 import { PrismaClient } from '@prisma/client';
 import { handleEventReassignment } from './supplementalEventService';
 import { syncMainEventToGoogleCalendar, deleteMainEventFromGoogleCalendar } from './mainEventGoogleCalendarSync';
+import { syncMainEventToAllMembers, deleteMainEventFromAllMembers } from './multiUserSyncService';
 
 const prisma = new PrismaClient();
 
@@ -14,6 +15,14 @@ export const getUserEvents = async (userId: string, filters?: {
   unassignedOnly?: boolean;
   assignedToMe?: boolean;
 }) => {
+  // Get user's keep_supplemental_events setting
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { keep_supplemental_events: true },
+  });
+
+  const keepSupplementalEvents = user?.keep_supplemental_events || false;
+
   // Build where clause
   const where: any = {
     event_calendar: {
@@ -47,7 +56,7 @@ export const getUserEvents = async (userId: string, filters?: {
     where.assigned_to_user_id = userId;
   }
 
-  return prisma.event.findMany({
+  const events = await prisma.event.findMany({
     where,
     include: {
       event_calendar: {
@@ -69,13 +78,45 @@ export const getUserEvents = async (userId: string, filters?: {
       start_time: 'asc',
     },
   });
+
+  // Filter supplemental events based on visibility rules:
+  // 1. If event is assigned to current user: always show supplemental events
+  // 2. If user has keep_supplemental_events enabled: show all supplemental events
+  // 3. Otherwise: don't show supplemental events
+  console.log(`[getUserEvents] Found ${events.length} events for user ${userId}`);
+  console.log(`[getUserEvents] keep_supplemental_events: ${keepSupplementalEvents}`);
+
+  const result = events.map((event) => {
+    const shouldShowSupplementalEvents =
+      event.assigned_to_user_id === userId || keepSupplementalEvents;
+
+    console.log(`[getUserEvents] Event "${event.title}": assigned_to=${event.assigned_to_user_id}, ` +
+      `supplemental_count=${event.supplemental_events.length}, ` +
+      `will_show_supplemental=${shouldShowSupplementalEvents}`);
+
+    return {
+      ...event,
+      supplemental_events: shouldShowSupplementalEvents ? event.supplemental_events : [],
+    };
+  });
+
+  console.log(`[getUserEvents] Returning ${result.length} events`);
+  return result;
 };
 
 /**
  * Get single event details
  */
 export const getEventById = async (eventId: string, userId: string) => {
-  return prisma.event.findFirst({
+  // Get user's keep_supplemental_events setting
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { keep_supplemental_events: true },
+  });
+
+  const keepSupplementalEvents = user?.keep_supplemental_events || false;
+
+  const event = await prisma.event.findFirst({
     where: {
       id: eventId,
       event_calendar: {
@@ -115,6 +156,22 @@ export const getEventById = async (eventId: string, userId: string) => {
       },
     },
   });
+
+  if (!event) {
+    return null;
+  }
+
+  // Filter supplemental events based on visibility rules:
+  // 1. If event is assigned to current user: always show supplemental events
+  // 2. If user has keep_supplemental_events enabled: show all supplemental events
+  // 3. Otherwise: don't show supplemental events
+  const shouldShowSupplementalEvents =
+    event.assigned_to_user_id === userId || keepSupplementalEvents;
+
+  return {
+    ...event,
+    supplemental_events: shouldShowSupplementalEvents ? event.supplemental_events : [],
+  };
 };
 
 /**
@@ -158,18 +215,12 @@ export const assignEvent = async (
   });
 
   // Handle Google Calendar sync for main event
+  // Main events are synced to ALL calendar members (not just assigned user)
   try {
-    if (previousAssignedUserId && previousAssignedUserId !== assignToUserId) {
-      // Delete from previous user's calendar (reassignment or unassignment)
-      await deleteMainEventFromGoogleCalendar(eventId, previousAssignedUserId);
-    }
-
-    if (assignToUserId) {
-      // Sync to new user's calendar (assignment or reassignment)
-      await syncMainEventToGoogleCalendar(eventId, assignToUserId);
-    }
+    // Sync to all calendar members
+    await syncMainEventToAllMembers(eventId);
   } catch (error) {
-    console.error('Failed to sync main event to Google Calendar:', error);
+    console.error('Failed to sync main event to all calendar members:', error);
     // Don't throw - Google Calendar sync is optional
   }
 

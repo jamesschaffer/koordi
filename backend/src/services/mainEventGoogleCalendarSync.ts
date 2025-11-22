@@ -83,19 +83,28 @@ export async function syncMainEventToGoogleCalendar(
       };
     }
 
-    // Check if event already has a Google Calendar ID (update vs create)
-    if (event.google_event_id) {
-      // Update existing event
+    // Check if THIS USER already has this event synced
+    const existingSync = await prisma.userGoogleEventSync.findUnique({
+      where: {
+        user_id_event_id: {
+          user_id: userId,
+          event_id: eventId,
+        },
+      },
+    });
+
+    if (existingSync && existingSync.google_event_id) {
+      // Update existing event for this user
       const response = await calendar.events.update({
         calendarId,
-        eventId: event.google_event_id,
+        eventId: existingSync.google_event_id,
         requestBody: eventBody,
       });
 
-      console.log(`Updated main event ${eventId} in Google Calendar: ${event.google_event_id}`);
-      return event.google_event_id;
+      console.log(`Updated main event ${eventId} in Google Calendar: ${existingSync.google_event_id}`);
+      return existingSync.google_event_id;
     } else {
-      // Create new event
+      // Create new event for this user
       const response = await calendar.events.insert({
         calendarId,
         requestBody: eventBody,
@@ -107,13 +116,16 @@ export async function syncMainEventToGoogleCalendar(
         throw new Error('Failed to get Google Calendar event ID');
       }
 
-      // Update event with Google Calendar event ID
-      await prisma.event.update({
-        where: { id: eventId },
-        data: {
-          google_event_id: googleEventId,
-        },
-      });
+      // Update event with Google Calendar event ID (for backward compatibility)
+      // Only set this if it's not already set (keeps the first user's ID)
+      if (!event.google_event_id) {
+        await prisma.event.update({
+          where: { id: eventId },
+          data: {
+            google_event_id: googleEventId,
+          },
+        });
+      }
 
       console.log(`Synced main event ${eventId} to Google Calendar: ${googleEventId}`);
       return googleEventId;
