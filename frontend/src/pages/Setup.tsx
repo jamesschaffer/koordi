@@ -48,7 +48,7 @@ function Setup() {
 
   // Prevent navigating away before completing setup
   const handleSkip = () => {
-    toast.error('Home address is required to use Koordi', {
+    toast.error('Home address is required to use Koordie', {
       description: 'We need your address to calculate drive times for events',
     });
   };
@@ -60,7 +60,7 @@ function Setup() {
           <div className="mx-auto w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mb-2">
             <MapPin className="w-8 h-8 text-blue-600" />
           </div>
-          <CardTitle className="text-3xl font-bold">Welcome to Koordi!</CardTitle>
+          <CardTitle className="text-3xl font-bold">Welcome to Koordie!</CardTitle>
           <CardDescription className="text-lg">
             {user?.name ? `Hi ${user.name.split(' ')[0]}! ` : 'Hi! '}
             Let's set up your profile to get started.
@@ -73,7 +73,7 @@ function Setup() {
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
                 <h3 className="font-semibold text-blue-900 mb-2">Why we need your home address</h3>
                 <p className="text-sm text-blue-800">
-                  Koordi automatically calculates drive times and creates travel blocks for your events.
+                  Koordie automatically calculates drive times and creates travel blocks for your events.
                   We'll use your home address to estimate when you need to leave and return home.
                 </p>
               </div>

@@ -17,7 +17,7 @@ function Login() {
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center px-4">
       <Card className="max-w-md w-full">
         <CardHeader className="text-center space-y-2">
-          <CardTitle className="text-4xl">Koordi</CardTitle>
+          <CardTitle className="text-4xl">Koordie</CardTitle>
           <CardDescription className="text-base">Family Scheduling Assistant</CardDescription>
         </CardHeader>
 
