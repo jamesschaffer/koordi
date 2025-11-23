@@ -503,7 +503,7 @@ export async function declineInvitation(invitationToken: string, userId: string)
 /**
  * Resend an invitation email
  * @param invitationId - The invitation ID
- * @param userId - User ID requesting resend (must be calendar owner)
+ * @param userId - User ID requesting resend (must be a calendar member)
  * @returns Updated invitation
  */
 export async function resendInvitation(invitationId: string, userId: string) {
@@ -514,6 +514,9 @@ export async function resendInvitation(invitationId: string, userId: string) {
       event_calendar: {
         include: {
           child: true,
+          members: {
+            where: { status: 'accepted' },
+          },
         },
       },
       invited_by: {
@@ -529,9 +532,12 @@ export async function resendInvitation(invitationId: string, userId: string) {
     throw new Error('Invitation not found');
   }
 
-  // Verify user is the calendar owner
-  if (invitation.event_calendar.owner_id !== userId) {
-    throw new Error('Only the calendar owner can resend invitations');
+  // Verify user is a member (owner or accepted member)
+  const isMember = invitation.event_calendar.owner_id === userId ||
+    invitation.event_calendar.members.some(m => m.user_id === userId);
+
+  if (!isMember) {
+    throw new Error('Only calendar members can resend invitations');
   }
 
   if (invitation.status !== 'pending') {
@@ -567,14 +573,20 @@ export async function resendInvitation(invitationId: string, userId: string) {
 /**
  * Cancel/delete an invitation
  * @param invitationId - The invitation ID
- * @param userId - User ID requesting cancellation (must be calendar owner)
+ * @param userId - User ID requesting cancellation (must be a calendar member)
  */
 export async function cancelInvitation(invitationId: string, userId: string) {
   // Find the invitation
   const invitation = await prisma.eventCalendarMembership.findUnique({
     where: { id: invitationId },
     include: {
-      event_calendar: true,
+      event_calendar: {
+        include: {
+          members: {
+            where: { status: 'accepted' },
+          },
+        },
+      },
     },
   });
 
@@ -582,9 +594,12 @@ export async function cancelInvitation(invitationId: string, userId: string) {
     throw new Error('Invitation not found');
   }
 
-  // Verify user is the calendar owner
-  if (invitation.event_calendar.owner_id !== userId) {
-    throw new Error('Only the calendar owner can cancel invitations');
+  // Verify user is a member (owner or accepted member)
+  const isMember = invitation.event_calendar.owner_id === userId ||
+    invitation.event_calendar.members.some(m => m.user_id === userId);
+
+  if (!isMember) {
+    throw new Error('Only calendar members can cancel invitations');
   }
 
   if (invitation.status !== 'pending') {
