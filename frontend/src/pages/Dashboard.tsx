@@ -363,9 +363,9 @@ function Dashboard() {
             </div>
 
             {/* Additional filters */}
-            <div className="flex gap-4 flex-wrap items-center">
+            <div className="flex flex-col md:flex-row gap-4 md:flex-wrap md:items-center">
               {/* Calendar filter */}
-              <div className="flex-1 min-w-[200px]">
+              <div className="w-full md:flex-1 md:min-w-[200px]">
                 <Select value={selectedCalendar} onValueChange={setSelectedCalendar}>
                   <SelectTrigger>
                     <SelectValue placeholder="All Calendars" />
@@ -382,23 +382,25 @@ function Dashboard() {
               </div>
 
               {/* Date range filters */}
-              <div className="flex gap-2 items-center">
-                <label className="text-sm font-medium">From:</label>
-                <Input
-                  type="date"
-                  value={startDate}
-                  onChange={(e) => setStartDate(e.target.value)}
-                  className="w-40"
-                />
-              </div>
-              <div className="flex gap-2 items-center">
-                <label className="text-sm font-medium">To:</label>
-                <Input
-                  type="date"
-                  value={endDate}
-                  onChange={(e) => setEndDate(e.target.value)}
-                  className="w-40"
-                />
+              <div className="flex flex-col sm:flex-row gap-4">
+                <div className="flex gap-2 items-center">
+                  <label className="text-sm font-medium shrink-0">From:</label>
+                  <Input
+                    type="date"
+                    value={startDate}
+                    onChange={(e) => setStartDate(e.target.value)}
+                    className="w-full sm:w-40"
+                  />
+                </div>
+                <div className="flex gap-2 items-center">
+                  <label className="text-sm font-medium shrink-0">To:</label>
+                  <Input
+                    type="date"
+                    value={endDate}
+                    onChange={(e) => setEndDate(e.target.value)}
+                    className="w-full sm:w-40"
+                  />
+                </div>
               </div>
               {(startDate || endDate) && (
                 <Button
@@ -445,8 +447,8 @@ function Dashboard() {
               <div key={event.id}>
                 <Card className={`hover:shadow-md transition-shadow ${hasConflict ? 'border-amber-300 border-2' : ''}`}>
                   <CardContent className="pt-6">
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1">
+                    <div className="flex flex-col md:flex-row items-start md:justify-between gap-4">
+                      <div className="flex-1 w-full">
                         <div className="flex items-center gap-3 mb-4">
                           <div
                             className="w-1 h-12 rounded-full shrink-0"
@@ -496,14 +498,14 @@ function Dashboard() {
                   </div>
 
                   {/* Assignment Controls */}
-                  <div className="ml-4 flex flex-col gap-2 items-end">
+                  <div className="w-full md:w-auto md:ml-4 flex flex-col gap-2 items-stretch md:items-end">
                     <Select
                       value={event.assigned_to_user_id || 'unassigned'}
                       onValueChange={(value) =>
                         handleAssign(event.id, value === 'unassigned' ? null : value)
                       }
                     >
-                      <SelectTrigger className="w-48">
+                      <SelectTrigger className="w-full md:w-48">
                         <SelectValue>
                           {event.assigned_to ? (
                             <div className="flex items-center gap-2">
