@@ -9,7 +9,6 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { Calendar, MapPin, AlertTriangle } from 'lucide-react';
-import { Badge } from '@/components/ui/badge';
 
 interface ConflictEvent {
   id: string;
