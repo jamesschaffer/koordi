@@ -237,7 +237,6 @@ function Children() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold text-gray-900">Family</h1>
-          <p className="text-gray-600 mt-1">Manage your family members and children</p>
         </div>
       </div>
 
@@ -258,7 +257,7 @@ function Children() {
         <TabsContent value="parents" className="space-y-4">
           <div className="flex items-center justify-between">
             <p className="text-sm text-gray-600">
-              Family members across all your calendars. Invite more parents by managing calendar members.
+              To add family members invite them to an existing calendar
             </p>
           </div>
 
@@ -346,10 +345,7 @@ function Children() {
 
         {/* Children Tab */}
         <TabsContent value="children" className="space-y-4">
-          <div className="flex items-center justify-between">
-            <p className="text-sm text-gray-600">
-              Manage your children and their information
-            </p>
+          <div className="flex items-center justify-end">
             <Button onClick={openAddDialog}>
               <Plus className="h-4 w-4 mr-2" />
               Add Child

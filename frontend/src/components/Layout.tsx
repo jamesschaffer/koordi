@@ -2,7 +2,7 @@ import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useEffect, useState } from 'react';
 import { useSocketEvents } from '../hooks/useSocketEvents';
-import { Menu } from 'lucide-react';
+import { Menu, LogOut, User as UserIcon } from 'lucide-react';
 import {
   Sheet,
   SheetContent,
@@ -11,6 +11,14 @@ import {
   SheetTrigger,
   SheetFooter,
 } from './ui/sheet';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from './ui/dropdown-menu';
 import { Button } from './ui/button';
 
 function Layout() {
@@ -176,27 +184,36 @@ function Layout() {
 
             {/* Desktop User menu */}
             {user && (
-              <div className="hidden md:flex items-center gap-4">
-                <div className="flex items-center gap-3">
-                  {user.avatar_url && (
-                    <img
-                      src={user.avatar_url}
-                      alt={user.name}
-                      className="w-8 h-8 rounded-full"
-                    />
-                  )}
-                  <div className="text-right">
-                    <p className="text-sm font-medium text-gray-900">{user.name}</p>
-                    <p className="text-xs text-gray-500">{user.email}</p>
-                  </div>
-                </div>
-                <button
-                  onClick={logout}
-                  className="px-4 py-2 text-sm font-medium text-gray-700 hover:text-gray-900 hover:bg-gray-100 rounded-md transition-colors"
-                >
-                  Logout
-                </button>
-              </div>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild className="hidden md:flex">
+                  <button className="rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">
+                    {user.avatar_url ? (
+                      <img
+                        src={user.avatar_url}
+                        alt={user.name}
+                        className="w-9 h-9 rounded-full hover:opacity-80 transition-opacity cursor-pointer"
+                      />
+                    ) : (
+                      <div className="w-9 h-9 rounded-full bg-blue-500 flex items-center justify-center hover:bg-blue-600 transition-colors cursor-pointer">
+                        <UserIcon className="w-5 h-5 text-white" />
+                      </div>
+                    )}
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56">
+                  <DropdownMenuLabel>
+                    <div className="flex flex-col space-y-1">
+                      <p className="text-sm font-medium text-gray-900">{user.name}</p>
+                      <p className="text-xs text-gray-500">{user.email}</p>
+                    </div>
+                  </DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={logout} className="cursor-pointer">
+                    <LogOut className="w-4 h-4 mr-2" />
+                    Logout
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             )}
           </div>
         </div>

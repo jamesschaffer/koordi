@@ -263,9 +263,6 @@ function Calendars() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Event Calendars</h1>
-          <p className="text-muted-foreground mt-1">
-            Manage your children's event calendars and sync their activities
-          </p>
         </div>
         <Button onClick={openAddDialog}>+ Add Calendar</Button>
       </div>

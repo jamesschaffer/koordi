@@ -331,9 +331,6 @@ function Dashboard() {
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Events</h1>
-        <p className="text-muted-foreground mt-1">
-          View and manage all events from your children's calendars
-        </p>
       </div>
 
       {/* Filters */}
