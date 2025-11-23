@@ -8,10 +8,10 @@ CREATE TABLE "users" (
     "google_calendar_id" VARCHAR(255),
     "google_calendar_sync_enabled" BOOLEAN NOT NULL DEFAULT false,
     "home_address" TEXT,
-    "home_lat" DECIMAL(10,8),
-    "home_lng" DECIMAL(11,8),
+    "home_latitude" DECIMAL(10,8),
+    "home_longitude" DECIMAL(11,8),
     "comfort_buffer_minutes" INTEGER NOT NULL DEFAULT 5,
-    "supplemental_retention" BOOLEAN NOT NULL DEFAULT false,
+    "keep_supplemental_events" BOOLEAN NOT NULL DEFAULT false,
     "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMPTZ(6) NOT NULL,
 
