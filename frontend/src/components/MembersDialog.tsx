@@ -17,7 +17,6 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import {
   AlertDialog,
@@ -32,7 +31,7 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { toast } from 'sonner';
-import { Mail, UserPlus, Trash2, RefreshCw, UserMinus, Crown, Clock, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react';
+import { Mail, UserPlus, Trash2, RefreshCw, UserMinus, Clock, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react';
 
 interface MembersDialogProps {
   calendarId: string;
@@ -235,42 +234,6 @@ export function MembersDialog({ calendarId, calendarName, isOwner, open, onOpenC
           </DialogHeader>
 
           <div className="space-y-6 py-4">
-            {/* Invitation Analytics */}
-            {membersData?.analytics && (
-              <div className="grid grid-cols-5 gap-3 pb-4 border-b">
-                <div className="text-center p-3 rounded-lg bg-slate-50 dark:bg-slate-900 border">
-                  <div className="text-2xl font-bold text-slate-900 dark:text-slate-100">
-                    {membersData.analytics.total}
-                  </div>
-                  <div className="text-xs text-muted-foreground mt-1">Total</div>
-                </div>
-                <div className="text-center p-3 rounded-lg bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-900">
-                  <div className="text-2xl font-bold text-green-700 dark:text-green-400">
-                    {membersData.analytics.accepted}
-                  </div>
-                  <div className="text-xs text-muted-foreground mt-1">Accepted</div>
-                </div>
-                <div className="text-center p-3 rounded-lg bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-900">
-                  <div className="text-2xl font-bold text-blue-700 dark:text-blue-400">
-                    {membersData.analytics.pending}
-                  </div>
-                  <div className="text-xs text-muted-foreground mt-1">Pending</div>
-                </div>
-                <div className="text-center p-3 rounded-lg bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-900">
-                  <div className="text-2xl font-bold text-red-700 dark:text-red-400">
-                    {membersData.analytics.declined}
-                  </div>
-                  <div className="text-xs text-muted-foreground mt-1">Declined</div>
-                </div>
-                <div className="text-center p-3 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900">
-                  <div className="text-2xl font-bold text-amber-700 dark:text-amber-400">
-                    {membersData.analytics.expired}
-                  </div>
-                  <div className="text-xs text-muted-foreground mt-1">Expired</div>
-                </div>
-              </div>
-            )}
-
             {/* Member Limit Warning */}
             {isOwner && isNearCapacity && (
               <Alert variant={isAtCapacity ? "destructive" : "default"} className="border-amber-500/50 bg-amber-50 dark:bg-amber-950/20">
