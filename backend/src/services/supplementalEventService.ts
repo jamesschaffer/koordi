@@ -53,6 +53,9 @@ export async function createSupplementalEvents(
     throw new Error('Assigned user not found');
   }
 
+  // Extract first name from user's full name (first word)
+  const firstName = user.name.split(' ')[0];
+
   // Validate user has home address
   if (!user.home_address || !user.home_latitude || !user.home_longitude) {
     throw new Error('User home address is not set. Please configure home address in settings.');
@@ -126,7 +129,7 @@ export async function createSupplementalEvents(
     data: {
       parent_event_id: eventId,
       type: 'departure',
-      title: `Drive to ${event.title}`,
+      title: `🚗 ${firstName} to drive to event`,
       start_time: departureStartTime,
       end_time: arrivalInfo.arrivalTime,
       origin_address: user.home_address,
@@ -148,11 +151,16 @@ export async function createSupplementalEvents(
     (event.start_time.getTime() - arrivalInfo.arrivalTime.getTime()) / 60000
   );
 
+  // Calculate the duration of the early arrival event itself (in minutes)
+  const earlyArrivalDuration = Math.round(
+    (event.start_time.getTime() - arrivalInfo.arrivalTime.getTime()) / 60000
+  );
+
   const bufferEvent = await prisma.supplementalEvent.create({
     data: {
       parent_event_id: eventId,
       type: 'buffer',
-      title: `Early arrival for ${event.title}`,
+      title: `🌅 ${earlyArrivalDuration} min early arrival`,
       start_time: arrivalInfo.arrivalTime,
       end_time: event.start_time,
       origin_address: event.location,
@@ -177,7 +185,7 @@ export async function createSupplementalEvents(
     data: {
       parent_event_id: eventId,
       type: 'return',
-      title: `Drive home from ${event.title}`,
+      title: `🚗 ${firstName} to drive home`,
       start_time: event.end_time,
       end_time: returnEndTime,
       origin_address: event.location,
