@@ -89,7 +89,7 @@ export async function sendInvitationEmail(data: {
           If you weren't expecting this invitation, you can safely ignore this email.
         </p>
         <p style="font-size: 12px; color: #6b7280; margin: 5px 0;">
-          Link expires in 7 days.
+          Link expires in 30 days.
         </p>
       </div>
     </body>
@@ -111,7 +111,7 @@ What you'll be able to do:
 
 This invitation was sent to ${data.to}
 If you weren't expecting this invitation, you can safely ignore this email.
-Link expires in 7 days.
+Link expires in 30 days.
   `.trim();
 
   const mailOptions = {

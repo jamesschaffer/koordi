@@ -844,35 +844,32 @@ Cancel pending invitation.
 
 ---
 
-### DELETE /api/event-calendars/:id/members/:user_id
+### DELETE /api/memberships/:id
 
 Remove member from Event Calendar.
 
 **Authentication:** Required
 **Authorization:** Any member can remove others (except owner)
 
+**Path Parameters:**
+- `id` - The membership ID (not user ID)
+
 **Response:** `204 No Content`
 
 **Side Effects:**
-- All events deleted from removed member's Google Calendar
-- Member loses access to all events
+- All events assigned to removed member are reassigned to calendar owner
+- Supplemental events for reassigned events are deleted
+- Removed member loses access to calendar
+- WebSocket broadcast of member removal to all calendar members
+- WebSocket broadcast of event reassignments
 
 **Errors:**
-- `403` - Cannot remove owner
-- `404` - Member not found
+- `400` - Invalid membership ID or member not accepted
+- `403` - Cannot remove the calendar owner
+- `403` - User is not a member of this calendar
+- `404` - Membership not found
 
----
-
-### DELETE /api/event-calendars/:id/members/me
-
-Leave Event Calendar (self-removal).
-
-**Authentication:** Required
-
-**Response:** `204 No Content`
-
-**Errors:**
-- `403` - Owner cannot leave (must delete calendar instead)
+**Note:** To remove yourself from a calendar, use this same endpoint with your own membership ID. The owner cannot remove themselves; they must delete the calendar instead.
 
 ---
 

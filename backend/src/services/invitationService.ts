@@ -126,7 +126,7 @@ export async function sendInvitation(
   invitedEmail: string,
   invitedByUserId: string
 ) {
-  // Verify calendar exists and user is the owner
+  // Verify calendar exists and user is a member
   const calendar = await prisma.eventCalendar.findUnique({
     where: { id: calendarId },
     include: {
@@ -141,8 +141,12 @@ export async function sendInvitation(
     throw new Error('Event Calendar not found');
   }
 
-  if (calendar.owner_id !== invitedByUserId) {
-    throw new Error('Only the calendar owner can send invitations');
+  // Verify user is a member (owner or accepted member)
+  const isMember = calendar.owner_id === invitedByUserId ||
+    calendar.members.some(m => m.user_id === invitedByUserId);
+
+  if (!isMember) {
+    throw new Error('Only calendar members can send invitations');
   }
 
   // Check member limit
@@ -598,7 +602,7 @@ export async function cancelInvitation(invitationId: string, userId: string) {
 /**
  * Remove a member from an Event Calendar
  * @param membershipId - The membership ID
- * @param userId - User ID requesting removal (must be calendar owner)
+ * @param userId - User ID requesting removal (must be a calendar member)
  * @returns Information about the removal for WebSocket broadcasting
  */
 export async function removeMember(membershipId: string, userId: string) {
@@ -612,6 +616,12 @@ export async function removeMember(membershipId: string, userId: string) {
             select: {
               id: true,
               name: true,
+            },
+          },
+          members: {
+            where: { status: 'accepted' },
+            select: {
+              user_id: true,
             },
           },
         },
@@ -630,9 +640,17 @@ export async function removeMember(membershipId: string, userId: string) {
     throw new Error('Membership not found');
   }
 
-  // Verify user is the calendar owner
-  if (membership.event_calendar.owner_id !== userId) {
-    throw new Error('Only the calendar owner can remove members');
+  // Verify requesting user is a member of the calendar
+  const isOwner = membership.event_calendar.owner_id === userId;
+  const isMember = membership.event_calendar.members.some(m => m.user_id === userId);
+
+  if (!isOwner && !isMember) {
+    throw new Error('Only calendar members can remove other members');
+  }
+
+  // Prevent removing the calendar owner
+  if (membership.user_id === membership.event_calendar.owner_id) {
+    throw new Error('Cannot remove the calendar owner');
   }
 
   if (membership.status !== 'accepted') {
