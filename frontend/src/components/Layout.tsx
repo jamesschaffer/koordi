@@ -1,12 +1,23 @@
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useSocketEvents } from '../hooks/useSocketEvents';
+import { Menu } from 'lucide-react';
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+  SheetFooter,
+} from './ui/sheet';
+import { Button } from './ui/button';
 
 function Layout() {
   const { user, logout, loading } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   // Enable WebSocket real-time updates
   useSocketEvents();
@@ -21,17 +32,16 @@ function Layout() {
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
-      <header className="bg-white shadow-sm">
+      <header className="sticky top-0 z-50 bg-white shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-8">
               <div>
                 <h1 className="text-2xl font-bold text-gray-900">Koordi</h1>
-                <p className="text-sm text-gray-600">Family Scheduling Assistant</p>
               </div>
 
-              {/* Navigation */}
-              <nav className="flex gap-4">
+              {/* Desktop Navigation */}
+              <nav className="hidden md:flex gap-4">
                 <Link
                   to="/"
                   className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${
@@ -75,9 +85,98 @@ function Layout() {
               </nav>
             </div>
 
-            {/* User menu */}
+            {/* Mobile Menu Button */}
+            <Sheet open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
+              <SheetTrigger asChild className="md:hidden">
+                <Button variant="ghost" size="icon">
+                  <Menu className="h-6 w-6" />
+                </Button>
+              </SheetTrigger>
+              <SheetContent side="left">
+                <SheetHeader>
+                  <SheetTitle>Menu</SheetTitle>
+                </SheetHeader>
+                <nav className="flex flex-col gap-2 mt-6">
+                  <Link
+                    to="/"
+                    onClick={() => setMobileMenuOpen(false)}
+                    className={`px-3 py-3 rounded-md text-base font-medium transition-colors ${
+                      location.pathname === '/'
+                        ? 'bg-blue-100 text-blue-700'
+                        : 'text-gray-700 hover:bg-gray-100'
+                    }`}
+                  >
+                    Dashboard
+                  </Link>
+                  <Link
+                    to="/calendars"
+                    onClick={() => setMobileMenuOpen(false)}
+                    className={`px-3 py-3 rounded-md text-base font-medium transition-colors ${
+                      location.pathname === '/calendars'
+                        ? 'bg-blue-100 text-blue-700'
+                        : 'text-gray-700 hover:bg-gray-100'
+                    }`}
+                  >
+                    Calendars
+                  </Link>
+                  <Link
+                    to="/children"
+                    onClick={() => setMobileMenuOpen(false)}
+                    className={`px-3 py-3 rounded-md text-base font-medium transition-colors ${
+                      location.pathname === '/children'
+                        ? 'bg-blue-100 text-blue-700'
+                        : 'text-gray-700 hover:bg-gray-100'
+                    }`}
+                  >
+                    Family
+                  </Link>
+                  <Link
+                    to="/settings"
+                    onClick={() => setMobileMenuOpen(false)}
+                    className={`px-3 py-3 rounded-md text-base font-medium transition-colors ${
+                      location.pathname === '/settings'
+                        ? 'bg-blue-100 text-blue-700'
+                        : 'text-gray-700 hover:bg-gray-100'
+                    }`}
+                  >
+                    Settings
+                  </Link>
+                </nav>
+                {user && (
+                  <SheetFooter className="mt-8 border-t pt-6">
+                    <div className="flex flex-col gap-4 w-full">
+                      <div className="flex items-center gap-3">
+                        {user.avatar_url && (
+                          <img
+                            src={user.avatar_url}
+                            alt={user.name}
+                            className="w-10 h-10 rounded-full"
+                          />
+                        )}
+                        <div>
+                          <p className="text-sm font-medium text-gray-900">{user.name}</p>
+                          <p className="text-xs text-gray-500">{user.email}</p>
+                        </div>
+                      </div>
+                      <Button
+                        onClick={() => {
+                          logout();
+                          setMobileMenuOpen(false);
+                        }}
+                        variant="outline"
+                        className="w-full"
+                      >
+                        Logout
+                      </Button>
+                    </div>
+                  </SheetFooter>
+                )}
+              </SheetContent>
+            </Sheet>
+
+            {/* Desktop User menu */}
             {user && (
-              <div className="flex items-center gap-4">
+              <div className="hidden md:flex items-center gap-4">
                 <div className="flex items-center gap-3">
                   {user.avatar_url && (
                     <img
