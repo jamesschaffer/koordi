@@ -555,6 +555,19 @@ export async function resendInvitation(invitationId: string, userId: string) {
     },
   });
 
+  // Send the invitation email
+  if (updatedInvitation.invited_by) {
+    sendInvitationEmail({
+      to: updatedInvitation.invited_email,
+      invitedBy: updatedInvitation.invited_by.name,
+      calendarName: updatedInvitation.event_calendar.name,
+      childName: updatedInvitation.event_calendar.child.name,
+      invitationToken: updatedInvitation.invitation_token,
+    }).catch((error) => {
+      console.error('Failed to resend invitation email:', error);
+    });
+  }
+
   console.log(`Resent invitation to ${invitation.invited_email} for calendar ${invitation.event_calendar.name}`);
 
   return updatedInvitation;
