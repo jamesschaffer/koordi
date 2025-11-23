@@ -78,6 +78,12 @@ router.post('/', async (req: Request, res: Response) => {
       color,
     });
 
+    // Trigger initial sync asynchronously (don't wait for completion)
+    // This allows the user to see their calendar immediately while events load in background
+    icsService.syncEventCalendar(calendar.id).catch((error) => {
+      console.error(`Failed to auto-sync new calendar ${calendar.id}:`, error);
+    });
+
     res.status(201).json(calendar);
   } catch (error) {
     console.error('Create calendar error:', error);
