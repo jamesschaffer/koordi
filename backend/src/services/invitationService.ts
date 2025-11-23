@@ -250,6 +250,9 @@ export async function sendInvitation(
   }
 
   // User doesn't exist - create pending invitation and send email
+  const expiryDate = new Date();
+  expiryDate.setDate(expiryDate.getDate() + 30); // Expire in 30 days
+
   const invitation = await prisma.eventCalendarMembership.create({
     data: {
       event_calendar_id: calendarId,
@@ -257,6 +260,7 @@ export async function sendInvitation(
       invitation_token: invitationToken,
       invited_by_user_id: invitedByUserId,
       status: 'pending',
+      expires_at: expiryDate,
     },
     include: {
       event_calendar: {
@@ -352,9 +356,20 @@ export async function getCalendarMembers(calendarId: string, userId: string) {
     throw new Error('Event Calendar not found or access denied');
   }
 
+  // Get invitation analytics
+  const now = new Date();
+  const analytics = {
+    total: calendar.members.length,
+    accepted: calendar.members.filter(m => m.status === 'accepted').length,
+    declined: calendar.members.filter(m => m.status === 'declined').length,
+    pending: calendar.members.filter(m => m.status === 'pending' && (!m.expires_at || m.expires_at > now)).length,
+    expired: calendar.members.filter(m => m.status === 'pending' && m.expires_at && m.expires_at <= now).length,
+  };
+
   return {
     owner: calendar.owner,
     members: calendar.members,
+    analytics,
   };
 }
 
@@ -384,6 +399,11 @@ export async function acceptInvitation(invitationToken: string, userId: string) 
 
   if (invitation.status !== 'pending') {
     throw new Error(`Invitation already ${invitation.status}`);
+  }
+
+  // Check if invitation has expired
+  if (invitation.expires_at && new Date() > invitation.expires_at) {
+    throw new Error('This invitation has expired. Please request a new invitation from the calendar owner.');
   }
 
   // Verify the user's email matches the invited email
@@ -442,6 +462,11 @@ export async function declineInvitation(invitationToken: string, userId: string)
 
   if (invitation.status !== 'pending') {
     throw new Error(`Invitation already ${invitation.status}`);
+  }
+
+  // Check if invitation has expired
+  if (invitation.expires_at && new Date() > invitation.expires_at) {
+    throw new Error('This invitation has expired. Please request a new invitation from the calendar owner.');
   }
 
   // Verify the user's email matches the invited email
@@ -795,4 +820,114 @@ export async function autoAcceptPendingInvitations(userId: string, email: string
   }
 
   return acceptedCount;
+}
+
+/**
+ * Clean up expired pending invitations
+ * Called by cron job daily to remove expired invitations
+ */
+export async function cleanupExpiredInvitations() {
+  const now = new Date();
+
+  // Find all expired pending invitations
+  const expiredInvitations = await prisma.eventCalendarMembership.findMany({
+    where: {
+      status: 'pending',
+      expires_at: {
+        lte: now, // Less than or equal to now (expired)
+      },
+    },
+    include: {
+      event_calendar: {
+        include: {
+          child: true,
+        },
+      },
+    },
+  });
+
+  if (expiredInvitations.length === 0) {
+    console.log('🧹 No expired invitations to clean up');
+    return 0;
+  }
+
+  console.log(`🧹 Found ${expiredInvitations.length} expired invitation(s) to clean up`);
+
+  // Delete expired invitations
+  const result = await prisma.eventCalendarMembership.deleteMany({
+    where: {
+      status: 'pending',
+      expires_at: {
+        lte: now,
+      },
+    },
+  });
+
+  console.log(`✅ Deleted ${result.count} expired invitation(s)`);
+  expiredInvitations.forEach((inv) => {
+    console.log(`  - ${inv.invited_email} for ${inv.event_calendar.name} (expired ${inv.expires_at?.toLocaleDateString()})`);
+  });
+
+  return result.count;
+}
+
+/**
+ * Send bulk invitations from CSV data
+ * @param calendarId - Event calendar ID
+ * @param emails - Array of email addresses
+ * @param invitedByUserId - User ID sending the invitations
+ * @returns Summary of results
+ */
+export async function sendBulkInvitations(
+  calendarId: string,
+  emails: string[],
+  invitedByUserId: string
+) {
+  const results: Array<{
+    email: string;
+    success: boolean;
+    error?: string;
+  }> = [];
+
+  // Remove duplicates and invalid emails
+  const uniqueEmails = Array.from(new Set(emails.map(e => e.trim().toLowerCase())));
+  const validEmails = uniqueEmails.filter(email => {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email);
+  });
+
+  console.log(`📧 Processing ${validEmails.length} valid email(s) out of ${emails.length} total`);
+
+  // Process each email
+  for (const email of validEmails) {
+    try {
+      await sendInvitation(calendarId, email, invitedByUserId);
+      results.push({
+        email,
+        success: true,
+      });
+      console.log(`  ✅ Sent invitation to ${email}`);
+    } catch (error: any) {
+      results.push({
+        email,
+        success: false,
+        error: error.message || 'Unknown error',
+      });
+      console.log(`  ❌ Failed to send invitation to ${email}: ${error.message}`);
+    }
+  }
+
+  const successCount = results.filter(r => r.success).length;
+  const failureCount = results.filter(r => !r.success).length;
+
+  console.log(`📊 Bulk invitation complete: ${successCount} sent, ${failureCount} failed`);
+
+  return {
+    total: emails.length,
+    valid: validEmails.length,
+    invalid: emails.length - validEmails.length,
+    success: successCount,
+    failed: failureCount,
+    results,
+  };
 }

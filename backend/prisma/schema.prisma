@@ -111,6 +111,7 @@ model EventCalendarMembership {
   invited_by_user_id  String   @db.Uuid
   invited_at          DateTime @default(now()) @db.Timestamptz(6)
   responded_at        DateTime? @db.Timestamptz(6)
+  expires_at          DateTime? @db.Timestamptz(6) // Invitations expire after 30 days
   created_at          DateTime @default(now()) @db.Timestamptz(6)
   updated_at          DateTime @updatedAt @db.Timestamptz(6)
 

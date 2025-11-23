@@ -1,5 +1,6 @@
 import cron from 'node-cron';
 import { icsSyncQueue } from '../config/queue';
+import { cleanupExpiredInvitations } from '../services/invitationService';
 
 /**
  * Initialize periodic calendar sync jobs
@@ -32,6 +33,20 @@ export const initializeScheduler = () => {
   });
 
   console.log('📅 Scheduler initialized: Calendar sync every 15 minutes');
+
+  // Schedule cleanup of expired invitations daily at 2 AM
+  // Cron pattern: 0 2 * * * = every day at 2:00 AM
+  cron.schedule('0 2 * * *', async () => {
+    console.log('🧹 Scheduled cleanup of expired invitations at', new Date().toISOString());
+
+    try {
+      await cleanupExpiredInvitations();
+    } catch (error) {
+      console.error('❌ Failed to cleanup expired invitations:', error);
+    }
+  });
+
+  console.log('🧹 Scheduler initialized: Expired invitations cleanup daily at 2 AM');
 
   // Also add an immediate sync job on startup
   icsSyncQueue.add(

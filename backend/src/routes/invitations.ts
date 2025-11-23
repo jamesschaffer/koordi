@@ -1,5 +1,7 @@
 import express, { Request, Response } from 'express';
+import multer from 'multer';
 import { authenticateToken } from '../middleware/auth';
+import { invitationRateLimiter } from '../middleware/invitationRateLimiter';
 import {
   sendInvitation,
   getCalendarMembers,
@@ -10,10 +12,26 @@ import {
   removeMember,
   getUserPendingInvitations,
   getFamilyMembers,
+  sendBulkInvitations,
 } from '../services/invitationService';
 import { SocketEvent, emitToCalendar } from '../config/socket';
 
 const router = express.Router();
+
+// Configure multer for CSV file uploads (memory storage)
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 1024 * 1024, // 1 MB
+  },
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype === 'text/csv' || file.originalname.endsWith('.csv')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only CSV files are allowed'));
+    }
+  },
+});
 
 /**
  * GET /api/family-members
@@ -42,8 +60,13 @@ router.get('/family-members', authenticateToken, async (req: Request, res: Respo
 /**
  * POST /api/event-calendars/:calendarId/invitations
  * Send an invitation to join an Event Calendar
+ * Rate limited to 10 invitations per calendar per hour
  */
-router.post('/event-calendars/:calendarId/invitations', authenticateToken, async (req: Request, res: Response) => {
+router.post(
+  '/event-calendars/:calendarId/invitations',
+  authenticateToken,
+  invitationRateLimiter,
+  async (req: Request, res: Response) => {
   try {
     const { calendarId } = req.params;
     const { email } = req.body;
@@ -93,6 +116,78 @@ router.post('/event-calendars/:calendarId/invitations', authenticateToken, async
     res.status(500).json({ error: 'Failed to send invitation' });
   }
 });
+
+/**
+ * POST /api/event-calendars/:calendarId/invitations/bulk
+ * Send bulk invitations from a CSV file
+ * CSV format: One email per line (or comma-separated)
+ */
+router.post(
+  '/event-calendars/:calendarId/invitations/bulk',
+  authenticateToken,
+  upload.single('file'),
+  async (req: Request, res: Response) => {
+    try {
+      const { calendarId } = req.params;
+      const userId = req.user?.userId;
+
+      if (!userId) {
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+
+      if (!req.file) {
+        return res.status(400).json({ error: 'CSV file is required' });
+      }
+
+      // Parse CSV file
+      const csvContent = req.file.buffer.toString('utf-8');
+      const lines = csvContent.split(/\r?\n/);
+      const emails: string[] = [];
+
+      // Extract emails from CSV (supports both comma-separated and one-per-line)
+      for (const line of lines) {
+        const trimmedLine = line.trim();
+        if (!trimmedLine) continue;
+
+        // Split by comma for comma-separated values
+        const parts = trimmedLine.split(',');
+        for (const part of parts) {
+          const email = part.trim();
+          if (email) {
+            emails.push(email);
+          }
+        }
+      }
+
+      if (emails.length === 0) {
+        return res.status(400).json({ error: 'No email addresses found in CSV file' });
+      }
+
+      // Process bulk invitations
+      const result = await sendBulkInvitations(calendarId, emails, userId);
+
+      // Broadcast WebSocket events for successful invitations
+      const io = req.app.get('io');
+      if (io) {
+        result.results
+          .filter(r => r.success)
+          .forEach(() => {
+            emitToCalendar(io, calendarId, SocketEvent.INVITATION_RECEIVED, {
+              calendar_id: calendarId,
+            });
+          });
+      }
+
+      res.status(200).json(result);
+    } catch (error) {
+      console.error('Bulk invitation error:', error);
+      if (error instanceof Error) {
+        return res.status(400).json({ error: error.message });
+      }
+      res.status(500).json({ error: 'Failed to process bulk invitations' });
+    }
+  }
+);
 
 /**
  * GET /api/event-calendars/:calendarId/members

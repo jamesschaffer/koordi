@@ -595,16 +595,12 @@ Invite parent members to Event Calendar.
 
 **Authentication:** Required
 **Authorization:** Any member can invite
+**Rate Limit:** 10 invitations per calendar per hour
 
 **Request Body:**
 ```json
 {
-  "invitations": [
-    {
-      "name": "Jane Doe",
-      "email": "jane@example.com"
-    }
-  ]
+  "email": "jane@example.com"
 }
 ```
 
@@ -613,33 +609,111 @@ Invite parent members to Event Calendar.
 - Email must be valid format
 - Cannot invite owner's email
 - Cannot invite existing members
+- Rate limited to 10 invitations per calendar per hour
 
 **Response:** `201 Created`
 ```json
 {
-  "invitations": [
+  "id": "invitation-uuid",
+  "event_calendar_id": "calendar-uuid",
+  "invited_email": "jane@example.com",
+  "status": "pending",
+  "invited_at": "2024-01-01T00:00:00Z",
+  "expires_at": "2024-01-31T00:00:00Z",
+  "invitation_token": "secure-token-uuid"
+}
+```
+
+**Behavior:**
+- If invited email belongs to existing user: status = "accepted" (auto-accepted)
+- If invited email is new: status = "pending", invitation email sent
+- Invitations automatically expire after 30 days
+
+**Errors:**
+- `400` - Invalid email format
+- `409` - User already member or invited
+- `422` - Max members exceeded (10)
+- `429` - Rate limit exceeded (10 invitations/hour per calendar)
+
+---
+
+### POST /api/event-calendars/:id/invitations/bulk
+
+Send bulk invitations from a CSV file.
+
+**Authentication:** Required
+**Authorization:** Any member can invite
+**Rate Limit:** Applies to total invitations sent (10/hour per calendar)
+
+**Request:**
+- Content-Type: `multipart/form-data`
+- File field name: `file`
+- File type: CSV (.csv)
+- Max file size: 1 MB
+
+**CSV Format:**
+- One email per line, or comma-separated
+- Example:
+```csv
+alice@example.com
+bob@example.com,charlie@example.com
+dave@example.com
+```
+
+**Response:** `200 OK`
+```json
+{
+  "summary": {
+    "total_emails": 4,
+    "valid_emails": 4,
+    "invalid_emails": 0,
+    "success_count": 3,
+    "failed_count": 1
+  },
+  "results": [
     {
-      "id": "invitation-uuid",
-      "email": "jane@example.com",
-      "token": "secure-token-uuid",
-      "status": "pending",
-      "created_at": "2024-01-01T00:00:00Z",
-      "invitation_url": "https://app.familyschedule.app/invitations/secure-token-uuid"
+      "email": "alice@example.com",
+      "success": true,
+      "invitation_id": "invitation-uuid",
+      "status": "pending"
+    },
+    {
+      "email": "bob@example.com",
+      "success": true,
+      "invitation_id": "invitation-uuid",
+      "status": "accepted"
+    },
+    {
+      "email": "charlie@example.com",
+      "success": true,
+      "invitation_id": "invitation-uuid",
+      "status": "pending"
+    },
+    {
+      "email": "dave@example.com",
+      "success": false,
+      "error": "User already member or invited"
     }
   ]
 }
 ```
 
+**Validation:**
+- Each email is validated and deduplicated
+- Invalid emails are reported in results
+- Processing continues even if some emails fail
+- Same restrictions as single invitation endpoint apply per email
+
 **Errors:**
-- `400` - Invalid email format
-- `409` - User already member or invited
-- `422` - Max members exceeded
+- `400` - No file uploaded or invalid CSV format
+- `400` - No valid email addresses found in CSV
+- `413` - File size exceeds 1 MB limit
 
 ---
 
 ### GET /api/event-calendars/:id/members
 
-List all members of Event Calendar.
+List all members of Event Calendar with invitation analytics.
 
 **Authentication:** Required
 **Authorization:** User must be a member
@@ -663,11 +737,26 @@ List all members of Event Calendar.
       "email": "jane@example.com",
       "invited_by": "John Doe",
       "status": "pending",
+      "expires_at": "2024-01-31T00:00:00Z",
       "created_at": "2024-01-01T00:00:00Z"
     }
-  ]
+  ],
+  "analytics": {
+    "total_invitations": 10,
+    "accepted": 5,
+    "declined": 2,
+    "pending": 2,
+    "expired": 1
+  }
 }
 ```
+
+**Analytics Explanation:**
+- `total_invitations`: All invitations ever sent (all statuses)
+- `accepted`: Invitations that resulted in active members
+- `declined`: Explicitly declined invitations
+- `pending`: Active pending invitations (not expired)
+- `expired`: Invitations that expired without response
 
 ---
 
@@ -698,7 +787,8 @@ Accept invitation to Event Calendar.
 ```
 
 **Errors:**
-- `404` - Invalid token
+- `404` - Invalid token or invitation not found
+- `400` - Invitation has expired (>30 days old)
 - `409` - Already accepted
 - `403` - Email mismatch (must sign in with invited email)
 
@@ -710,12 +800,19 @@ Decline invitation to Event Calendar.
 
 **Authentication:** Required
 
+**Request Body:** None
+
 **Response:** `200 OK`
 ```json
 {
   "message": "Invitation declined"
 }
 ```
+
+**Errors:**
+- `404` - Invalid token or invitation not found
+- `400` - Invitation has expired (>30 days old)
+- `409` - Already declined
 
 ---
 

@@ -30,8 +30,9 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { toast } from 'sonner';
-import { Mail, UserPlus, Trash2, RefreshCw, UserMinus, Crown, Clock, CheckCircle2, XCircle } from 'lucide-react';
+import { Mail, UserPlus, Trash2, RefreshCw, UserMinus, Crown, Clock, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react';
 
 interface MembersDialogProps {
   calendarId: string;
@@ -57,15 +58,51 @@ export function MembersDialog({ calendarId, calendarName, isOwner, open, onOpenC
   // Send invitation mutation
   const sendInvitationMutation = useMutation({
     mutationFn: (email: string) => sendInvitation(calendarId, email, token),
+    onMutate: async (email: string) => {
+      // Cancel outgoing queries to prevent overwriting optimistic update
+      await queryClient.cancelQueries({ queryKey: ['calendar-members', calendarId] });
+
+      // Snapshot previous value
+      const previousMembers = queryClient.getQueryData<CalendarMembers>(['calendar-members', calendarId]);
+
+      // Optimistically update cache
+      if (previousMembers) {
+        queryClient.setQueryData<CalendarMembers>(['calendar-members', calendarId], {
+          ...previousMembers,
+          members: [
+            ...previousMembers.members,
+            {
+              id: `temp-${Date.now()}`,
+              status: 'pending' as const,
+              invited_email: email,
+              invited_at: new Date().toISOString(),
+              invited_by: {
+                name: previousMembers.owner.name,
+                email: previousMembers.owner.email,
+              },
+            },
+          ],
+        });
+      }
+
+      return { previousMembers };
+    },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['calendar-members', calendarId] });
       setInviteEmail('');
       toast.success('Parent added to calendar');
     },
-    onError: (error: any) => {
+    onError: (error: any, _email, context) => {
+      // Rollback on error
+      if (context?.previousMembers) {
+        queryClient.setQueryData(['calendar-members', calendarId], context.previousMembers);
+      }
       toast.error('Failed to send invitation', {
         description: error.message || 'Please try again',
       });
+    },
+    onSettled: () => {
+      // Always refetch to ensure consistency
+      queryClient.invalidateQueries({ queryKey: ['calendar-members', calendarId] });
     },
   });
 
@@ -86,30 +123,77 @@ export function MembersDialog({ calendarId, calendarName, isOwner, open, onOpenC
   // Cancel invitation mutation
   const cancelInvitationMutation = useMutation({
     mutationFn: (invitationId: string) => cancelInvitation(invitationId, token),
+    onMutate: async (invitationId: string) => {
+      // Cancel outgoing queries
+      await queryClient.cancelQueries({ queryKey: ['calendar-members', calendarId] });
+
+      // Snapshot previous value
+      const previousMembers = queryClient.getQueryData<CalendarMembers>(['calendar-members', calendarId]);
+
+      // Optimistically remove the invitation
+      if (previousMembers) {
+        queryClient.setQueryData<CalendarMembers>(['calendar-members', calendarId], {
+          ...previousMembers,
+          members: previousMembers.members.filter((m) => m.id !== invitationId),
+        });
+      }
+
+      return { previousMembers };
+    },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['calendar-members', calendarId] });
       toast.success('Invitation cancelled');
     },
-    onError: (error: any) => {
+    onError: (error: any, _invitationId, context) => {
+      // Rollback on error
+      if (context?.previousMembers) {
+        queryClient.setQueryData(['calendar-members', calendarId], context.previousMembers);
+      }
       toast.error('Failed to cancel invitation', {
         description: error.message || 'Please try again',
       });
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['calendar-members', calendarId] });
     },
   });
 
   // Remove member mutation
   const removeMemberMutation = useMutation({
     mutationFn: (membershipId: string) => removeMember(membershipId, token),
+    onMutate: async (membershipId: string) => {
+      // Cancel outgoing queries
+      await queryClient.cancelQueries({ queryKey: ['calendar-members', calendarId] });
+      await queryClient.cancelQueries({ queryKey: ['calendars'] });
+
+      // Snapshot previous value
+      const previousMembers = queryClient.getQueryData<CalendarMembers>(['calendar-members', calendarId]);
+
+      // Optimistically remove the member
+      if (previousMembers) {
+        queryClient.setQueryData<CalendarMembers>(['calendar-members', calendarId], {
+          ...previousMembers,
+          members: previousMembers.members.filter((m) => m.id !== membershipId),
+        });
+      }
+
+      return { previousMembers };
+    },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['calendar-members', calendarId] });
-      queryClient.invalidateQueries({ queryKey: ['calendars'] });
       setConfirmRemoveId(null);
       toast.success('Member removed');
     },
-    onError: (error: any) => {
+    onError: (error: any, _membershipId, context) => {
+      // Rollback on error
+      if (context?.previousMembers) {
+        queryClient.setQueryData(['calendar-members', calendarId], context.previousMembers);
+      }
       toast.error('Failed to remove member', {
         description: error.message || 'Please try again',
       });
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['calendar-members', calendarId] });
+      queryClient.invalidateQueries({ queryKey: ['calendars'] });
     },
   });
 
@@ -135,16 +219,78 @@ export function MembersDialog({ calendarId, calendarName, isOwner, open, onOpenC
   const pendingMembers = membersData?.members.filter((m) => m.status === 'pending') || [];
   const declinedMembers = membersData?.members.filter((m) => m.status === 'declined') || [];
 
+  // Member limit constants
+  const MAX_MEMBERS = 10;
+  const memberCount = acceptedMembers.length;
+  const isAtCapacity = memberCount >= MAX_MEMBERS;
+  const isNearCapacity = memberCount >= 8;
+
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="sm:max-w-[600px] max-h-[80vh] overflow-y-auto">
+        <DialogContent className="sm:max-w-[700px] max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Manage Members</DialogTitle>
             <DialogDescription>{calendarName}</DialogDescription>
           </DialogHeader>
 
           <div className="space-y-6 py-4">
+            {/* Invitation Analytics */}
+            {membersData?.analytics && (
+              <div className="grid grid-cols-5 gap-3 pb-4 border-b">
+                <div className="text-center p-3 rounded-lg bg-slate-50 dark:bg-slate-900 border">
+                  <div className="text-2xl font-bold text-slate-900 dark:text-slate-100">
+                    {membersData.analytics.total}
+                  </div>
+                  <div className="text-xs text-muted-foreground mt-1">Total</div>
+                </div>
+                <div className="text-center p-3 rounded-lg bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-900">
+                  <div className="text-2xl font-bold text-green-700 dark:text-green-400">
+                    {membersData.analytics.accepted}
+                  </div>
+                  <div className="text-xs text-muted-foreground mt-1">Accepted</div>
+                </div>
+                <div className="text-center p-3 rounded-lg bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-900">
+                  <div className="text-2xl font-bold text-blue-700 dark:text-blue-400">
+                    {membersData.analytics.pending}
+                  </div>
+                  <div className="text-xs text-muted-foreground mt-1">Pending</div>
+                </div>
+                <div className="text-center p-3 rounded-lg bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-900">
+                  <div className="text-2xl font-bold text-red-700 dark:text-red-400">
+                    {membersData.analytics.declined}
+                  </div>
+                  <div className="text-xs text-muted-foreground mt-1">Declined</div>
+                </div>
+                <div className="text-center p-3 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900">
+                  <div className="text-2xl font-bold text-amber-700 dark:text-amber-400">
+                    {membersData.analytics.expired}
+                  </div>
+                  <div className="text-xs text-muted-foreground mt-1">Expired</div>
+                </div>
+              </div>
+            )}
+
+            {/* Member Limit Warning */}
+            {isOwner && isNearCapacity && (
+              <Alert variant={isAtCapacity ? "destructive" : "default"} className="border-amber-500/50 bg-amber-50 dark:bg-amber-950/20">
+                <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-500" />
+                <AlertDescription className="text-sm text-amber-900 dark:text-amber-200">
+                  {isAtCapacity ? (
+                    <>
+                      <strong>Calendar at capacity</strong> ({memberCount}/{MAX_MEMBERS} members).
+                      Remove a member to add more.
+                    </>
+                  ) : (
+                    <>
+                      <strong>Almost at capacity</strong> ({memberCount}/{MAX_MEMBERS} members).
+                      You can add {MAX_MEMBERS - memberCount} more member{MAX_MEMBERS - memberCount !== 1 ? 's' : ''}.
+                    </>
+                  )}
+                </AlertDescription>
+              </Alert>
+            )}
+
             {/* Send Invitation Section (Owner Only) - Moved to top */}
             {isOwner && (
               <div className="space-y-2 pb-4 border-b">
@@ -156,20 +302,22 @@ export function MembersDialog({ calendarId, calendarName, isOwner, open, onOpenC
                   <div className="flex-1">
                     <Input
                       type="email"
-                      placeholder="Enter email address"
+                      placeholder={isAtCapacity ? "Calendar at capacity" : "Enter email address"}
                       value={inviteEmail}
                       onChange={(e) => setInviteEmail(e.target.value)}
-                      disabled={sendInvitationMutation.isPending}
+                      disabled={sendInvitationMutation.isPending || isAtCapacity}
                     />
                   </div>
-                  <Button type="submit" disabled={sendInvitationMutation.isPending}>
+                  <Button type="submit" disabled={sendInvitationMutation.isPending || isAtCapacity}>
                     <UserPlus className="h-4 w-4 mr-2" />
                     {sendInvitationMutation.isPending ? 'Adding...' : 'Add Parent'}
                   </Button>
                 </form>
-                <p className="text-xs text-muted-foreground">
-                  New users will receive an email invitation. Existing users will automatically be added to the event calendar.
-                </p>
+                {!isAtCapacity && (
+                  <p className="text-xs text-muted-foreground">
+                    New users will receive an email invitation. Existing users will automatically be added to the event calendar.
+                  </p>
+                )}
               </div>
             )}
 
@@ -241,24 +389,28 @@ export function MembersDialog({ calendarId, calendarName, isOwner, open, onOpenC
                       </div>
                       <Badge variant="secondary">Pending</Badge>
                       {isOwner && (
-                        <div className="flex gap-1">
+                        <div className="flex gap-2">
                           <Button
-                            variant="ghost"
-                            size="icon"
+                            variant="outline"
+                            size="sm"
                             className="shrink-0"
                             onClick={() => resendInvitationMutation.mutate(member.id)}
                             disabled={resendInvitationMutation.isPending}
+                            title="Resend invitation email"
                           >
-                            <RefreshCw className="h-4 w-4" />
+                            <RefreshCw className={`h-3 w-3 mr-1 ${resendInvitationMutation.isPending ? 'animate-spin' : ''}`} />
+                            Resend
                           </Button>
                           <Button
                             variant="ghost"
-                            size="icon"
-                            className="shrink-0 text-destructive"
+                            size="sm"
+                            className="shrink-0 text-destructive hover:text-destructive"
                             onClick={() => cancelInvitationMutation.mutate(member.id)}
                             disabled={cancelInvitationMutation.isPending}
+                            title="Cancel invitation"
                           >
-                            <Trash2 className="h-4 w-4" />
+                            <Trash2 className="h-3 w-3 mr-1" />
+                            Cancel
                           </Button>
                         </div>
                       )}

@@ -43,7 +43,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { toast } from 'sonner';
-import { Pencil, Trash2, RefreshCw, AlertCircle, CheckCircle2, Users, MoreVertical, Circle } from 'lucide-react';
+import { Pencil, Trash2, RefreshCw, AlertCircle, CheckCircle2, Users, MoreVertical, Circle, Clock } from 'lucide-react';
 import { MembersDialog } from '../components/MembersDialog';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -492,9 +492,19 @@ function Calendars() {
               <CardHeader>
                 <div className="flex items-start justify-between">
                   <div className="space-y-1 flex-1">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: calendar.color }} />
                       <CardTitle className="text-lg">{calendar.name}</CardTitle>
+                      {calendar._count && calendar._count.members > 0 && (
+                        <Badge
+                          variant="secondary"
+                          className="cursor-pointer hover:bg-secondary/80"
+                          onClick={() => setMembersDialogCalendarId(calendar.id)}
+                        >
+                          <Clock className="h-3 w-3 mr-1" />
+                          {calendar._count.members} pending
+                        </Badge>
+                      )}
                     </div>
                     <CardDescription>{calendar.child.name}</CardDescription>
                   </div>

@@ -28,6 +28,9 @@ export interface EventCalendar {
       email: string;
     };
   }>;
+  _count?: {
+    members: number;
+  };
 }
 
 export interface CreateCalendarData {
@@ -147,6 +150,13 @@ export interface CalendarMembers {
     avatar_url?: string;
   };
   members: Membership[];
+  analytics: {
+    total: number;
+    accepted: number;
+    declined: number;
+    pending: number;
+    expired: number;
+  };
 }
 
 export const sendInvitation = (calendarId: string, email: string, token: string) =>

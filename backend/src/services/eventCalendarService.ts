@@ -53,6 +53,15 @@ export const getUserEventCalendars = async (userId: string) => {
           },
         },
       },
+      _count: {
+        select: {
+          members: {
+            where: {
+              status: 'pending',
+            },
+          },
+        },
+      },
     },
     orderBy: {
       created_at: 'desc',
