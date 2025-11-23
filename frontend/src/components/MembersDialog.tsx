@@ -272,7 +272,7 @@ export function MembersDialog({ calendarId, calendarName, isOwner, open, onOpenC
             )}
 
             {/* Member Limit Warning */}
-            {isOwner && isNearCapacity && (
+            {isNearCapacity && (
               <Alert variant={isAtCapacity ? "destructive" : "default"} className="border-amber-500/50 bg-amber-50 dark:bg-amber-950/20">
                 <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-500" />
                 <AlertDescription className="text-sm text-amber-900 dark:text-amber-200">
@@ -291,35 +291,33 @@ export function MembersDialog({ calendarId, calendarName, isOwner, open, onOpenC
               </Alert>
             )}
 
-            {/* Send Invitation Section (Owner Only) - Moved to top */}
-            {isOwner && (
-              <div className="space-y-2 pb-4 border-b">
-                <h3 className="text-sm font-medium flex items-center gap-2">
-                  <UserPlus className="h-4 w-4 text-blue-500" />
-                  Add Parent
-                </h3>
-                <form onSubmit={handleSendInvitation} className="flex gap-2">
-                  <div className="flex-1">
-                    <Input
-                      type="email"
-                      placeholder={isAtCapacity ? "Calendar at capacity" : "Enter email address"}
-                      value={inviteEmail}
-                      onChange={(e) => setInviteEmail(e.target.value)}
-                      disabled={sendInvitationMutation.isPending || isAtCapacity}
-                    />
-                  </div>
-                  <Button type="submit" disabled={sendInvitationMutation.isPending || isAtCapacity}>
-                    <UserPlus className="h-4 w-4 mr-2" />
-                    {sendInvitationMutation.isPending ? 'Adding...' : 'Add Parent'}
-                  </Button>
-                </form>
-                {!isAtCapacity && (
-                  <p className="text-xs text-muted-foreground">
-                    New users will receive an email invitation. Existing users will automatically be added to the event calendar.
-                  </p>
-                )}
-              </div>
-            )}
+            {/* Send Invitation Section - Any member can invite */}
+            <div className="space-y-2 pb-4 border-b">
+              <h3 className="text-sm font-medium flex items-center gap-2">
+                <UserPlus className="h-4 w-4 text-blue-500" />
+                Add Parent
+              </h3>
+              <form onSubmit={handleSendInvitation} className="flex gap-2">
+                <div className="flex-1">
+                  <Input
+                    type="email"
+                    placeholder={isAtCapacity ? "Calendar at capacity" : "Enter email address"}
+                    value={inviteEmail}
+                    onChange={(e) => setInviteEmail(e.target.value)}
+                    disabled={sendInvitationMutation.isPending || isAtCapacity}
+                  />
+                </div>
+                <Button type="submit" disabled={sendInvitationMutation.isPending || isAtCapacity}>
+                  <UserPlus className="h-4 w-4 mr-2" />
+                  {sendInvitationMutation.isPending ? 'Adding...' : 'Add Parent'}
+                </Button>
+              </form>
+              {!isAtCapacity && (
+                <p className="text-xs text-muted-foreground">
+                  New users will receive an email invitation. Existing users will automatically be added to the event calendar.
+                </p>
+              )}
+            </div>
 
             {/* Accepted Members Section */}
             {acceptedMembers.length > 0 && (
@@ -347,7 +345,7 @@ export function MembersDialog({ calendarId, calendarName, isOwner, open, onOpenC
                         <p className="font-medium truncate">{member.user?.name || member.invited_email}</p>
                         <p className="text-sm text-muted-foreground truncate">{member.user?.email || member.invited_email}</p>
                       </div>
-                      {isOwner && member.user?.id !== membersData?.owner.id && (
+                      {member.user?.id !== membersData?.owner.id && (
                         <Button
                           variant="ghost"
                           size="icon"
@@ -388,32 +386,30 @@ export function MembersDialog({ calendarId, calendarName, isOwner, open, onOpenC
                         </p>
                       </div>
                       <Badge variant="secondary">Pending</Badge>
-                      {isOwner && (
-                        <div className="flex gap-2">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="shrink-0"
-                            onClick={() => resendInvitationMutation.mutate(member.id)}
-                            disabled={resendInvitationMutation.isPending}
-                            title="Resend invitation email"
-                          >
-                            <RefreshCw className={`h-3 w-3 mr-1 ${resendInvitationMutation.isPending ? 'animate-spin' : ''}`} />
-                            Resend
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="shrink-0 text-destructive hover:text-destructive"
-                            onClick={() => cancelInvitationMutation.mutate(member.id)}
-                            disabled={cancelInvitationMutation.isPending}
-                            title="Cancel invitation"
-                          >
-                            <Trash2 className="h-3 w-3 mr-1" />
-                            Cancel
-                          </Button>
-                        </div>
-                      )}
+                      <div className="flex gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="shrink-0"
+                          onClick={() => resendInvitationMutation.mutate(member.id)}
+                          disabled={resendInvitationMutation.isPending}
+                          title="Resend invitation email"
+                        >
+                          <RefreshCw className={`h-3 w-3 mr-1 ${resendInvitationMutation.isPending ? 'animate-spin' : ''}`} />
+                          Resend
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="shrink-0 text-destructive hover:text-destructive"
+                          onClick={() => cancelInvitationMutation.mutate(member.id)}
+                          disabled={cancelInvitationMutation.isPending}
+                          title="Cancel invitation"
+                        >
+                          <Trash2 className="h-3 w-3 mr-1" />
+                          Cancel
+                        </Button>
+                      </div>
                     </div>
                   ))}
                 </div>
