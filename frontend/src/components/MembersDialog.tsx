@@ -350,7 +350,6 @@ export function MembersDialog({ calendarId, calendarName, isOwner, open, onOpenC
                           Invited {new Date(member.invited_at).toLocaleDateString()}
                         </p>
                       </div>
-                      <Badge variant="secondary">Pending</Badge>
                       {isOwner && (
                         <div className="flex gap-2">
                           <Button
