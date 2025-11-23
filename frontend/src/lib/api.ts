@@ -43,7 +43,21 @@ class ApiClient {
       return undefined as T;
     }
 
-    return response.json();
+    // Check if response has content before parsing JSON
+    const contentType = response.headers.get('content-type');
+    const contentLength = response.headers.get('content-length');
+
+    if (contentLength === '0' || !contentType?.includes('application/json')) {
+      return undefined as T;
+    }
+
+    // Parse JSON with error handling
+    try {
+      return await response.json();
+    } catch (error) {
+      // If body is empty or invalid, return undefined instead of throwing
+      return undefined as T;
+    }
   }
 
   async get<T>(endpoint: string, options?: RequestOptions): Promise<T> {
