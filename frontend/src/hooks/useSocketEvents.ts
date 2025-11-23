@@ -4,19 +4,19 @@ import { useSocket } from '../contexts/SocketContext';
 import { toast } from 'sonner';
 
 // Socket event types (must match backend)
-export enum SocketEvent {
-  EVENT_ASSIGNED = 'event:assigned',
-  EVENT_UNASSIGNED = 'event:unassigned',
-  EVENT_CREATED = 'event:created',
-  EVENT_UPDATED = 'event:updated',
-  EVENT_DELETED = 'event:deleted',
-  CONFLICT_RESOLVED = 'conflict:resolved',
-  CALENDAR_SYNCED = 'calendar:synced',
-  CALENDAR_SYNC_FAILED = 'calendar:sync_failed',
-  MEMBER_ADDED = 'member:added',
-  MEMBER_REMOVED = 'member:removed',
-  INVITATION_RECEIVED = 'invitation:received',
-}
+export const SocketEvent: Record<string, string> = {
+  EVENT_ASSIGNED: 'event:assigned',
+  EVENT_UNASSIGNED: 'event:unassigned',
+  EVENT_CREATED: 'event:created',
+  EVENT_UPDATED: 'event:updated',
+  EVENT_DELETED: 'event:deleted',
+  CONFLICT_RESOLVED: 'conflict:resolved',
+  CALENDAR_SYNCED: 'calendar:synced',
+  CALENDAR_SYNC_FAILED: 'calendar:sync_failed',
+  MEMBER_ADDED: 'member:added',
+  MEMBER_REMOVED: 'member:removed',
+  INVITATION_RECEIVED: 'invitation:received',
+};
 
 interface EventAssignedPayload {
   event_id: string;

@@ -4,10 +4,10 @@ import { getEvents, assignEvent, checkEventConflicts, resolveConflict } from '..
 import type { Event, ConcurrentModificationError } from '../lib/api-events';
 import { getCalendars } from '../lib/api-calendars';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardDescription, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { Calendar, MapPin, User, AlertTriangle, X } from 'lucide-react';
+import { Calendar, MapPin, User, AlertTriangle } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { useToast } from '@/hooks/use-toast';
 import { ConflictWarningDialog } from '../components/ConflictWarningDialog';
@@ -205,7 +205,7 @@ function Dashboard() {
 
   // Detect conflicts between events for the same assignee, including drive times
   const eventsWithConflicts = useMemo(() => {
-    if (!events || events.length === 0) return [];
+    if (!events || events.length === 0) return {};
 
     // Group events by assignee
     const eventsByAssignee = events.reduce((acc, event) => {
@@ -432,9 +432,10 @@ function Dashboard() {
         </Card>
       ) : (
         <div className="space-y-4">
-          {events.map((event, index) => {
-            const hasConflict = eventsWithConflicts[event.id]?.length > 0;
-            const conflictingEventIds = eventsWithConflicts[event.id] || [];
+          {events.map((event: Event, index: number) => {
+            const conflicts = eventsWithConflicts as Record<string, string[]>;
+            const hasConflict = conflicts[event.id]?.length > 0;
+            const conflictingEventIds = conflicts[event.id] || [];
 
             // Find the next event in the list
             const nextEvent = index < events.length - 1 ? events[index + 1] : null;

@@ -102,8 +102,12 @@ function AddressAutocomplete({
       const formattedAddress = place.formattedAddress;
 
       if (location && formattedAddress) {
-        const latitude = typeof location.lat === 'function' ? location.lat() : location.lat;
-        const longitude = typeof location.lng === 'function' ? location.lng() : location.lng;
+        // Extract latitude and longitude (could be a function or property)
+        const lat = location.lat;
+        const lng = location.lng;
+
+        const latitude = (typeof lat === 'function' ? lat() : lat) as number;
+        const longitude = (typeof lng === 'function' ? lng() : lng) as number;
 
         onChange(formattedAddress);
         onPlaceSelect({

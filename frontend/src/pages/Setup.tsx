@@ -46,13 +46,6 @@ function Setup() {
     updateAddressMutation.mutate();
   };
 
-  // Prevent navigating away before completing setup
-  const handleSkip = () => {
-    toast.error('Home address is required to use Koordie', {
-      description: 'We need your address to calculate drive times for events',
-    });
-  };
-
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
       <Card className="w-full max-w-2xl shadow-xl">

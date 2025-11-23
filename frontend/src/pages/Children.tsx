@@ -12,19 +12,10 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
 import { MembersDialog } from '@/components/MembersDialog';
-import { Plus, Pencil, Trash2, Calendar, User, Users, Crown, Mail } from 'lucide-react';
+import { Plus, Pencil, Trash2, Calendar, User, Users, Mail } from 'lucide-react';
 import { toast } from 'sonner';
 
 type DialogMode = 'add' | 'edit' | null;
-
-interface FamilyMember {
-  id: string;
-  name: string;
-  email: string;
-  avatar_url?: string;
-  isOwner: boolean;
-  calendars: { id: string; name: string; color: string }[];
-}
 
 function Children() {
   const { token, user } = useAuth();
@@ -40,32 +31,32 @@ function Children() {
   const [name, setName] = useState('');
   const [dateOfBirth, setDateOfBirth] = useState('');
   const [photoUrl, setPhotoUrl] = useState('');
-  const [photoFile, setPhotoFile] = useState<File | null>(null);
 
   // Fetch children
   const { data: children = [], isLoading: isLoadingChildren } = useQuery({
     queryKey: ['children'],
-    queryFn: () => getChildren(token),
+    queryFn: () => getChildren(token || ''),
   });
 
   // Fetch calendars to show child associations
   const { data: calendars = [] } = useQuery({
     queryKey: ['calendars'],
-    queryFn: () => getCalendars(token),
+    queryFn: () => getCalendars(token || ''),
   });
 
   // Fetch family members (includes historical members)
   const { data: familyMembersData = [] } = useQuery({
     queryKey: ['family-members'],
-    queryFn: () => getFamilyMembers(token),
+    queryFn: () => getFamilyMembers(token || ''),
   });
 
   // Process family members to add isOwner flag and sort
   const familyMembers = useMemo(() => {
-    return familyMembersData
+    if (!familyMembersData || !Array.isArray(familyMembersData)) return [];
+    return (familyMembersData as any[])
       .map((member: any) => ({
         ...member,
-        isOwner: member.id === user?.userId,
+        isOwner: member.id === user?.id,
       }))
       .sort((a: any, b: any) => {
         // Current user first
@@ -73,11 +64,11 @@ function Children() {
         if (b.isOwner) return 1;
         return a.name.localeCompare(b.name);
       });
-  }, [familyMembersData, user?.userId]);
+  }, [familyMembersData, user]);
 
   // Create mutation
   const createMutation = useMutation({
-    mutationFn: (data: CreateChildData) => createChild(data, token),
+    mutationFn: (data: CreateChildData) => createChild(data, token || ''),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['children'] });
       toast.success('Child added successfully!');
@@ -93,7 +84,7 @@ function Children() {
   // Update mutation
   const updateMutation = useMutation({
     mutationFn: ({ id, data }: { id: string; data: Partial<CreateChildData> }) =>
-      updateChild(id, data, token),
+      updateChild(id, data, token || ''),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['children'] });
       toast.success('Child updated successfully!');
@@ -108,7 +99,7 @@ function Children() {
 
   // Delete mutation
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => deleteChild(id, token),
+    mutationFn: (id: string) => deleteChild(id, token || ''),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['children'] });
       queryClient.invalidateQueries({ queryKey: ['calendars'] });
@@ -128,7 +119,6 @@ function Children() {
     setName('');
     setDateOfBirth('');
     setPhotoUrl('');
-    setPhotoFile(null);
     setSelectedChild(null);
   };
 
@@ -138,7 +128,6 @@ function Children() {
     setName(child.name);
     setDateOfBirth(child.date_of_birth || '');
     setPhotoUrl(child.photo_url || '');
-    setPhotoFile(null);
   };
 
   const closeDialog = () => {
@@ -147,7 +136,6 @@ function Children() {
     setName('');
     setDateOfBirth('');
     setPhotoUrl('');
-    setPhotoFile(null);
   };
 
   const handleSubmit = () => {
@@ -180,7 +168,6 @@ function Children() {
         toast.error('Photo must be less than 5MB');
         return;
       }
-      setPhotoFile(file);
       const reader = new FileReader();
       reader.onloadend = () => {
         setPhotoUrl(reader.result as string);
@@ -273,7 +260,7 @@ function Children() {
             </Card>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {familyMembers.map((member) => (
+              {familyMembers.map((member: any) => (
                 <Card key={member.id} className="overflow-hidden">
                   <CardHeader className="pb-4">
                     <div className="flex items-start justify-between">
@@ -310,7 +297,7 @@ function Children() {
                       </div>
                       {member.calendars.length > 0 ? (
                         <div className="space-y-2">
-                          {member.calendars.map((cal) => (
+                          {member.calendars.map((cal: any) => (
                             <div
                               key={cal.id}
                               className="flex items-center gap-2 text-sm p-2 bg-gray-50 rounded"
