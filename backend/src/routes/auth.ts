@@ -24,18 +24,22 @@ const SCOPES = [
 /**
  * GET /api/auth/google
  * Initiates Google OAuth flow
- * Query params:
- *   - force_consent: Set to 'true' to force re-authorization
+ *
+ * IMPORTANT: We always use prompt='consent' to ensure we receive a refresh token.
+ * Without a refresh token, we cannot sync events to the user's Google Calendar.
+ * Google only returns a refresh token on the first authorization OR when using prompt='consent'.
+ *
+ * The trade-off: Users will see the consent screen every time they log in, but this
+ * guarantees the application will work correctly. Without this, returning users
+ * would not have their events synced to Google Calendar.
  */
 router.get('/google', (req: Request, res: Response) => {
-  const forceConsent = req.query.force_consent === 'true';
-
   const authUrl = oauth2Client.generateAuthUrl({
     access_type: 'offline',
     scope: SCOPES,
-    // Use 'select_account' for returning users (better UX)
-    // Use 'consent' only when we need a new refresh token
-    prompt: forceConsent ? 'consent' : 'select_account',
+    // Always use 'consent' to ensure we get a refresh token
+    // This is critical for Google Calendar sync to work
+    prompt: 'consent',
   });
 
   res.json({ url: authUrl });
@@ -79,9 +83,16 @@ router.get('/google/callback', async (req: Request, res: Response) => {
     }
 
     // Create or update user
-    // Note: refresh_token is only provided on first authorization or when using prompt=consent
-    // For returning users, we keep their existing refresh token
+    // Since we use prompt='consent', we should always receive a refresh token
     const refreshToken: string | undefined = tokens.refresh_token || undefined;
+
+    if (!refreshToken) {
+      // This should never happen with prompt='consent', but handle it gracefully
+      console.error('No refresh token received from Google OAuth. This is unexpected with prompt=consent');
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+      return res.redirect(`${frontendUrl}/auth/error?message=Failed to get authorization. Please try again.`);
+    }
+
     const user = await findOrCreateUser(
       {
         id: profile.id || '',
