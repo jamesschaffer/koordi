@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { getMe, updateAddress, updateComfortBuffer, updateRetention, deleteAccount } from '../lib/api-users';
@@ -61,6 +61,7 @@ function Settings() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['user'] });
       setAddressSaveStatus('saved');
+      toast.success('Address saved successfully');
       setTimeout(() => setAddressSaveStatus('idle'), 2000);
     },
     onError: (error: any) => {
@@ -120,35 +121,6 @@ function Settings() {
       });
     },
   });
-
-  const saveAddress = useCallback(() => {
-    if (!address.trim()) {
-      return;
-    }
-    updateAddressMutation.mutate();
-  }, [address, latitude, longitude, updateAddressMutation]);
-
-  const handlePlaceSelect = (place: { address: string; latitude: number; longitude: number }) => {
-    setAddress(place.address);
-    setLatitude(place.latitude);
-    setLongitude(place.longitude);
-    // Auto-save when a place is selected from autocomplete
-    setTimeout(() => {
-      updateAddressMutation.mutate();
-    }, 100);
-  };
-
-  const handleAddressBlur = () => {
-    // Auto-save on blur if address has changed
-    if (address && address !== user?.home_address) {
-      if (!latitude || !longitude) {
-        toast.warning('Address not validated', {
-          description: 'Select from suggestions for accurate location',
-        });
-      }
-      saveAddress();
-    }
-  };
 
   const handleComfortBufferChange = (value: number[]) => {
     setComfortBuffer(value);
@@ -223,8 +195,15 @@ function Settings() {
           <AddressAutocomplete
             value={address}
             onChange={setAddress}
-            onPlaceSelect={handlePlaceSelect}
-            onBlur={handleAddressBlur}
+            onPlaceSelect={({ address: addr, latitude: lat, longitude: lng }) => {
+              setAddress(addr);
+              setLatitude(lat);
+              setLongitude(lng);
+              // Auto-save after selection
+              setTimeout(() => {
+                updateAddressMutation.mutate();
+              }, 100);
+            }}
             disabled={addressSaveStatus === 'saving'}
           />
         </CardContent>

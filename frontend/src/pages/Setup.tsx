@@ -12,7 +12,7 @@ import { MapPin } from 'lucide-react';
 function Setup() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { user } = useAuth();
+  const { user, refreshUser } = useAuth();
   const token = localStorage.getItem('auth_token') || '';
 
   const [address, setAddress] = useState('');
@@ -22,12 +22,14 @@ function Setup() {
   // Update address mutation
   const updateAddressMutation = useMutation({
     mutationFn: () => updateAddress({ address, latitude, longitude }, token),
-    onSuccess: () => {
-      // Invalidate user query to refetch with updated address
-      queryClient.invalidateQueries({ queryKey: ['user'] });
+    onSuccess: async () => {
       toast.success('Profile setup complete!');
-      // Navigate after a short delay to ensure user data is updated
-      setTimeout(() => navigate('/'), 500);
+      // Refresh the user in AuthContext to get updated address
+      await refreshUser();
+      // Also invalidate React Query cache for any components using it
+      await queryClient.invalidateQueries({ queryKey: ['user'] });
+      // Now navigate to dashboard
+      navigate('/');
     },
     onError: (error: any) => {
       console.error('Address update error:', error);
@@ -40,7 +42,9 @@ function Setup() {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!address || !latitude || !longitude) {
-      toast.error('Please select a valid address from the suggestions');
+      toast.error('Please select a valid address', {
+        description: 'Choose an address from the dropdown suggestions',
+      });
       return;
     }
     updateAddressMutation.mutate();
@@ -56,21 +60,13 @@ function Setup() {
           <CardTitle className="text-3xl font-bold">Welcome to Koordie!</CardTitle>
           <CardDescription className="text-lg">
             {user?.name ? `Hi ${user.name.split(' ')[0]}! ` : 'Hi! '}
-            Let's set up your profile to get started.
+            Let's set your address so we can provide you drive time estimates for your events.
           </CardDescription>
         </CardHeader>
 
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-6">
             <div className="space-y-4">
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                <h3 className="font-semibold text-blue-900 mb-2">Why we need your home address</h3>
-                <p className="text-sm text-blue-800">
-                  Koordie automatically calculates drive times and creates travel blocks for your events.
-                  We'll use your home address to estimate when you need to leave and return home.
-                </p>
-              </div>
-
               <div>
                 <AddressAutocomplete
                   value={address}

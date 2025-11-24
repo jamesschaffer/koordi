@@ -10,7 +10,6 @@ interface AddressAutocompleteProps {
   value: string;
   onChange: (value: string) => void;
   onPlaceSelect: (place: { address: string; latitude: number; longitude: number }) => void;
-  onBlur?: () => void;
   label?: string;
   placeholder?: string;
   disabled?: boolean;
@@ -25,7 +24,6 @@ function AddressAutocomplete({
   value,
   onChange,
   onPlaceSelect,
-  onBlur,
   label = "Address",
   placeholder = "123 Main St, City, State ZIP",
   disabled = false,
@@ -213,7 +211,6 @@ function AddressAutocomplete({
             // Delay to allow click on suggestion
             setTimeout(() => {
               setOpen(false);
-              onBlur?.();
             }, 200);
           }}
           onFocus={() => {
@@ -239,9 +236,6 @@ function AddressAutocomplete({
           </div>
         )}
       </div>
-      <p className="text-sm text-muted-foreground">
-        Start typing your address and select from the suggestions
-      </p>
     </div>
   );
 }
