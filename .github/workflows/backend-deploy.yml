@@ -52,7 +52,7 @@ jobs:
             --region=${{ env.REGION }} \
             --platform=managed \
             --allow-unauthenticated \
-            --set-env-vars=NODE_ENV=production \
+            --set-env-vars=NODE_ENV=production,FRONTEND_URL=https://app.koordie.com,GOOGLE_REDIRECT_URI=https://api.koordie.com/api/auth/google/callback \
             --quiet
 
       - name: Show deployment URL
