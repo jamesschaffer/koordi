@@ -1,8 +1,8 @@
-import { PrismaClient } from '@prisma/client';
 import crypto from 'crypto';
 import { sendInvitationEmail, sendInvitationAcceptedEmail, sendInvitationDeclinedEmail } from './emailService';
-
-const prisma = new PrismaClient();
+import { deleteMainEventFromGoogleCalendar } from './mainEventGoogleCalendarSync';
+import { deleteSupplementalEventFromGoogleCalendar } from './googleCalendarSyncService';
+import { prisma } from '../lib/prisma';
 
 const MAX_MEMBERS_PER_CALENDAR = 10;
 
@@ -705,6 +705,57 @@ export async function removeMember(membershipId: string, userId: string) {
       where: { id: membershipId },
     });
   });
+
+  // Step 4: Delete all calendar events from the removed member's Google Calendar
+  if (membership.user_id) {
+    // Get all sync records for this user for events in this calendar
+    const syncRecords = await prisma.userGoogleEventSync.findMany({
+      where: {
+        user_id: membership.user_id,
+        OR: [
+          {
+            event: {
+              event_calendar_id: membership.event_calendar_id,
+            },
+          },
+          {
+            supplemental_event: {
+              parent_event: {
+                event_calendar_id: membership.event_calendar_id,
+              },
+            },
+          },
+        ],
+      },
+      include: {
+        event: true,
+        supplemental_event: true,
+      },
+    });
+
+    console.log(`[removeMember] Deleting ${syncRecords.length} synced events from ${membership.user?.email}'s Google Calendar`);
+
+    // Delete each synced event from Google Calendar
+    for (const sync of syncRecords) {
+      try {
+        if (sync.sync_type === 'main' && sync.event_id) {
+          await deleteMainEventFromGoogleCalendar(sync.event_id, membership.user_id);
+          console.log(`[removeMember] Deleted main event from Google Calendar`);
+        } else if (sync.sync_type === 'supplemental' && sync.supplemental_event_id) {
+          await deleteSupplementalEventFromGoogleCalendar(sync.supplemental_event_id, membership.user_id);
+          console.log(`[removeMember] Deleted supplemental event from Google Calendar`);
+        }
+
+        // Delete the sync record
+        await prisma.userGoogleEventSync.delete({
+          where: { id: sync.id },
+        });
+      } catch (error: any) {
+        console.error(`[removeMember] Failed to delete synced event from Google Calendar:`, error.message);
+        // Continue with other deletions even if one fails
+      }
+    }
+  }
 
   if (reassignedEventIds.length > 0) {
     console.log(`Reassigned events: ${assignedEvents.map(e => e.title).join(', ')}`);

@@ -1,8 +1,6 @@
-import { PrismaClient } from '@prisma/client';
 import { syncMainEventToGoogleCalendar, deleteMainEventFromGoogleCalendar } from './mainEventGoogleCalendarSync';
 import { syncSupplementalEventToGoogleCalendar, deleteSupplementalEventFromGoogleCalendar } from './googleCalendarSyncService';
-
-const prisma = new PrismaClient();
+import { prisma } from '../lib/prisma';
 
 /**
  * Get all calendar members (accepted only) for an event's calendar
@@ -81,18 +79,101 @@ export async function getSupplementalEventViewers(
 /**
  * Sync a main event to all calendar members
  * Tracks each sync in the UserGoogleEventSync table
+ * Optimized to batch-fetch all user data to eliminate N+1 queries
  * @param eventId - The event ID
  */
 export async function syncMainEventToAllMembers(eventId: string): Promise<void> {
-  const memberIds = await getEventCalendarMembers(eventId);
+  // Step 1: Fetch event with calendar info (1 query)
+  const event = await prisma.event.findUnique({
+    where: { id: eventId },
+    include: {
+      event_calendar: {
+        include: {
+          child: true,
+          members: {
+            where: { status: 'accepted' },
+            select: {
+              user_id: true,
+              user: {
+                select: {
+                  id: true,
+                  google_calendar_sync_enabled: true,
+                  google_refresh_token_enc: true,
+                  google_calendar_id: true,
+                },
+              },
+            },
+          },
+          owner: {
+            select: {
+              id: true,
+              google_calendar_sync_enabled: true,
+              google_refresh_token_enc: true,
+              google_calendar_id: true,
+            },
+          },
+        },
+      },
+    },
+  });
 
-  console.log(`Syncing main event ${eventId} to ${memberIds.length} calendar members`);
+  if (!event) {
+    console.error(`Event ${eventId} not found`);
+    return;
+  }
 
-  // Sync to each member in parallel
+  // Step 2: Build member list and user map from batch-fetched data
+  const userMap = new Map<string, any>();
+  const memberIds: string[] = [];
+
+  // Add members
+  event.event_calendar.members.forEach((m) => {
+    if (m.user && m.user_id) {
+      userMap.set(m.user.id, m.user);
+      memberIds.push(m.user.id);
+    }
+  });
+
+  // Add owner if not already in members
+  const owner = event.event_calendar.owner;
+  if (owner && !memberIds.includes(owner.id)) {
+    userMap.set(owner.id, owner);
+    memberIds.push(owner.id);
+  }
+
+  // Step 3: Fetch existing sync records for all members (1 query)
+  const existingSyncs = await prisma.userGoogleEventSync.findMany({
+    where: {
+      event_id: eventId,
+      sync_type: 'main',
+      user_id: { in: memberIds },
+    },
+  });
+
+  const existingSyncMap = new Map(
+    existingSyncs.map((sync) => [sync.user_id, sync])
+  );
+
+  console.log(`Syncing main event ${eventId} to ${memberIds.length} calendar members (batch-optimized)`);
+
+  // Step 4: Sync to each member in parallel, using batch-fetched data
   await Promise.all(
     memberIds.map(async (userId) => {
       try {
-        const googleEventId = await syncMainEventToGoogleCalendar(eventId, userId);
+        const user = userMap.get(userId);
+
+        // Check if user has sync enabled (using batch-fetched data)
+        if (!user || !user.google_calendar_sync_enabled || !user.google_refresh_token_enc) {
+          console.log(`Google Calendar sync not enabled for user ${userId}`);
+          return;
+        }
+
+        // Sync using batch-fetched context
+        const googleEventId = await syncMainEventToGoogleCalendar(
+          eventId,
+          userId,
+          { event, user, existingSync: existingSyncMap.get(userId) }
+        );
 
         if (googleEventId) {
           // Record the sync in our tracking table
@@ -161,6 +242,7 @@ export async function deleteMainEventFromAllMembers(eventId: string): Promise<vo
 
 /**
  * Sync supplemental events to non-assigned members who have keep_supplemental_events enabled
+ * Optimized to batch-fetch all user data to eliminate N+1 queries
  * @param supplementalEventId - The supplemental event ID
  * @param assignedUserId - The user assigned to the parent event
  */
@@ -168,27 +250,117 @@ export async function syncSupplementalEventToOptInMembers(
   supplementalEventId: string,
   assignedUserId: string
 ): Promise<void> {
-  // Get the parent event ID
+  // Step 1: Fetch supplemental event with parent event and calendar info (1 query)
   const supplementalEvent = await prisma.supplementalEvent.findUnique({
     where: { id: supplementalEventId },
-    select: { parent_event_id: true },
+    include: {
+      parent_event: {
+        include: {
+          event_calendar: {
+            include: {
+              child: true,
+              members: {
+                where: {
+                  status: 'accepted',
+                  user: {
+                    keep_supplemental_events: true,
+                  },
+                },
+                select: {
+                  user_id: true,
+                  user: {
+                    select: {
+                      id: true,
+                      google_calendar_sync_enabled: true,
+                      google_refresh_token_enc: true,
+                      google_calendar_id: true,
+                    },
+                  },
+                },
+              },
+              owner: {
+                select: {
+                  id: true,
+                  keep_supplemental_events: true,
+                  google_calendar_sync_enabled: true,
+                  google_refresh_token_enc: true,
+                  google_calendar_id: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    },
   });
 
   if (!supplementalEvent) {
     return;
   }
 
-  const viewerIds = await getSupplementalEventViewers(supplementalEvent.parent_event_id, assignedUserId);
+  // Step 2: Build viewer list (exclude assigned user)
+  const userMap = new Map<string, any>();
+  const viewerIds: string[] = [];
 
-  console.log(
-    `Syncing supplemental event ${supplementalEventId} to ${viewerIds.length} opt-in members`
+  // Add members who have keep_supplemental_events enabled
+  supplementalEvent.parent_event.event_calendar.members.forEach((m) => {
+    if (m.user && m.user_id && m.user_id !== assignedUserId) {
+      userMap.set(m.user.id, m.user);
+      viewerIds.push(m.user.id);
+    }
+  });
+
+  // Add owner if they have keep_supplemental_events enabled and are not the assigned user
+  const owner = supplementalEvent.parent_event.event_calendar.owner;
+  if (owner && owner.id !== assignedUserId && owner.keep_supplemental_events && !viewerIds.includes(owner.id)) {
+    userMap.set(owner.id, owner);
+    viewerIds.push(owner.id);
+  }
+
+  if (viewerIds.length === 0) {
+    console.log(`No opt-in members to sync supplemental event ${supplementalEventId}`);
+    return;
+  }
+
+  // Step 3: Fetch existing sync records for all viewers (1 query)
+  const existingSyncs = await prisma.userGoogleEventSync.findMany({
+    where: {
+      supplemental_event_id: supplementalEventId,
+      sync_type: 'supplemental',
+      user_id: { in: viewerIds },
+    },
+  });
+
+  const existingSyncMap = new Map(
+    existingSyncs.map((sync) => [sync.user_id, sync])
   );
 
-  // Sync to each viewer in parallel
+  console.log(
+    `Syncing supplemental event ${supplementalEventId} to ${viewerIds.length} opt-in members (batch-optimized)`
+  );
+
+  // Step 4: Sync to each viewer in parallel, using batch-fetched data
   await Promise.all(
     viewerIds.map(async (userId) => {
       try {
-        const googleEventId = await syncSupplementalEventToGoogleCalendar(supplementalEventId, userId);
+        const user = userMap.get(userId);
+
+        // Check if user has sync enabled (using batch-fetched data)
+        if (!user || !user.google_calendar_sync_enabled || !user.google_refresh_token_enc) {
+          console.log(`Google Calendar sync not enabled for user ${userId}`);
+          return;
+        }
+
+        // Sync using batch-fetched context
+        const googleEventId = await syncSupplementalEventToGoogleCalendar(
+          supplementalEventId,
+          userId,
+          {
+            supplementalEvent,
+            user,
+            existingSync: existingSyncMap.get(userId),
+          }
+        );
 
         if (googleEventId) {
           // Record the sync in our tracking table

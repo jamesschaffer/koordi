@@ -1,9 +1,7 @@
 import axios from 'axios';
 import ical from 'node-ical';
-import { PrismaClient } from '@prisma/client';
-import { syncMainEventToGoogleCalendar } from './mainEventGoogleCalendarSync';
-
-const prisma = new PrismaClient();
+import { syncMainEventToAllMembers } from './multiUserSyncService';
+import { prisma } from '../lib/prisma';
 
 interface ParsedEvent {
   ics_uid: string;
@@ -281,53 +279,22 @@ export const syncAllCalendars = async (): Promise<{
 async function syncCalendarEventsToMembers(calendarId: string): Promise<void> {
   console.log(`[syncCalendarEventsToMembers] Starting sync for calendar ${calendarId}`);
 
-  // Get all accepted members of this calendar
-  const members = await prisma.eventCalendarMembership.findMany({
-    where: {
-      event_calendar_id: calendarId,
-      status: 'accepted',
-      user_id: { not: null },
-    },
-    include: {
-      user: {
-        select: {
-          id: true,
-          email: true,
-          google_calendar_sync_enabled: true,
-          google_refresh_token_enc: true,
-        },
-      },
-    },
-  });
-
   // Get all events for this calendar
   const events = await prisma.event.findMany({
     where: { event_calendar_id: calendarId },
     select: { id: true, title: true },
   });
 
-  console.log(`[syncCalendarEventsToMembers] Found ${members.length} members and ${events.length} events`);
+  console.log(`[syncCalendarEventsToMembers] Found ${events.length} events to sync`);
 
-  // Sync each event to each member's Google Calendar
-  for (const member of members) {
-    if (!member.user) continue;
-
-    // Check if user has Google Calendar sync enabled
-    if (!member.user.google_calendar_sync_enabled || !member.user.google_refresh_token_enc) {
-      console.log(`[syncCalendarEventsToMembers] Skipping user ${member.user.email} - Calendar sync not enabled`);
-      continue;
-    }
-
-    console.log(`[syncCalendarEventsToMembers] Syncing ${events.length} events to ${member.user.email}`);
-
-    // Sync all events to this member's Google Calendar
-    for (const event of events) {
-      try {
-        await syncMainEventToGoogleCalendar(event.id, member.user.id);
-        console.log(`[syncCalendarEventsToMembers] Synced event "${event.title}" to ${member.user.email}`);
-      } catch (error: any) {
-        console.error(`[syncCalendarEventsToMembers] Failed to sync event "${event.title}" to ${member.user.email}:`, error.message);
-      }
+  // Sync each event to all members using the multiUserSyncService
+  // This properly uses the UserGoogleEventSync tracking table
+  for (const event of events) {
+    try {
+      await syncMainEventToAllMembers(event.id);
+      console.log(`[syncCalendarEventsToMembers] Synced event "${event.title}" to all members`);
+    } catch (error: any) {
+      console.error(`[syncCalendarEventsToMembers] Failed to sync event "${event.title}":`, error.message);
     }
   }
 

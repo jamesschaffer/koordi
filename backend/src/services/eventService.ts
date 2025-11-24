@@ -1,10 +1,8 @@
-import { PrismaClient } from '@prisma/client';
 import { handleEventReassignment } from './supplementalEventService';
 import { syncMainEventToGoogleCalendar, deleteMainEventFromGoogleCalendar } from './mainEventGoogleCalendarSync';
 import { syncMainEventToAllMembers, deleteMainEventFromAllMembers } from './multiUserSyncService';
 import { ConcurrentModificationError } from '../errors/ConcurrentModificationError';
-
-const prisma = new PrismaClient();
+import { prisma } from '../lib/prisma';
 
 /**
  * Get all events for calendars the user has access to

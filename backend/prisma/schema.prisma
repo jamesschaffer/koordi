@@ -148,7 +148,6 @@ model Event {
   is_all_day            Boolean   @default(false)
   assigned_to_user_id   String?   @db.Uuid
   version               Int       @default(1) // Optimistic locking: increments on each assignment change
-  google_event_id       String?   @db.VarChar(255) // Google Calendar event ID
   last_modified         DateTime  @default(now()) @db.Timestamptz(6) // From ICS or update timestamp
   created_at            DateTime  @default(now()) @db.Timestamptz(6)
   updated_at            DateTime  @updatedAt @db.Timestamptz(6)
@@ -164,7 +163,6 @@ model Event {
   @@index([assigned_to_user_id])
   @@index([start_time])
   @@index([end_time])
-  @@index([google_event_id])
   @@map("events")
 }
 
@@ -187,7 +185,6 @@ model SupplementalEvent {
   destination_lat       Decimal   @db.Decimal(10, 8)
   destination_lng       Decimal   @db.Decimal(11, 8)
   drive_time_minutes    Int       // Raw drive time from Google Maps (0 for buffer events)
-  google_event_id       String?   @db.VarChar(255) // Google Calendar event ID
   last_traffic_check    DateTime? @db.Timestamptz(6)
   created_at            DateTime  @default(now()) @db.Timestamptz(6)
   updated_at            DateTime  @updatedAt @db.Timestamptz(6)
@@ -199,7 +196,6 @@ model SupplementalEvent {
   @@index([parent_event_id])
   @@index([type])
   @@index([start_time])
-  @@index([google_event_id])
   @@map("supplemental_events")
 }
 
@@ -239,13 +235,11 @@ model SupplementalEvent {
 // - event_calendar_id (calendar's events)
 // - assigned_to_user_id (user's assigned events)
 // - start_time, end_time (date range queries for dashboard)
-// - google_event_id (Google Calendar sync)
 
 // SupplementalEvent:
 // - parent_event_id (cascade deletions)
 // - type (departure/return filtering)
 // - start_time (dashboard queries)
-// - google_event_id (Google Calendar sync)
 
 // ============================================================================
 // USER GOOGLE EVENT SYNC ENTITY
@@ -274,6 +268,10 @@ model UserGoogleEventSync {
   @@index([event_id])
   @@index([supplemental_event_id])
   @@index([google_event_id])
+  // Composite indexes for common query patterns
+  @@index([event_id, sync_type]) // Lookup all users synced to an event by type
+  @@index([supplemental_event_id, sync_type]) // Lookup all users synced to supplemental event by type
+  @@index([user_id, sync_type]) // Cleanup operations filtering by user and type
   @@map("user_google_event_syncs")
 }
 

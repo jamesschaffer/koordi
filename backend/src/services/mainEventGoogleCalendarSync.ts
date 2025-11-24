@@ -1,51 +1,76 @@
-import { PrismaClient } from '@prisma/client';
 import { getGoogleCalendarClient, isGoogleCalendarSyncEnabled } from '../utils/googleCalendarClient';
+import { prisma } from '../lib/prisma';
+import {
+  NotFoundError,
+  ExternalAPIError,
+  getErrorMessage,
+  formatErrorForLogging,
+} from '../utils/errors';
 
-const prisma = new PrismaClient();
+/**
+ * Context for batch-optimized sync operations
+ * Passing this context eliminates redundant database queries
+ */
+export interface SyncContext {
+  event?: any; // Event with event_calendar.child included
+  user?: any; // User with google_calendar_id, google_calendar_sync_enabled, google_refresh_token_enc
+  existingSync?: any; // UserGoogleEventSync record
+}
 
 /**
  * Sync a main event to Google Calendar
  * @param eventId - The event ID
  * @param userId - The user who owns the Google Calendar
+ * @param context - Optional pre-fetched data to eliminate N+1 queries
  * @returns The Google Calendar event ID
  */
 export async function syncMainEventToGoogleCalendar(
   eventId: string,
-  userId: string
+  userId: string,
+  context?: SyncContext
 ): Promise<string | null> {
-  // Check if user has Google Calendar sync enabled
-  const syncEnabled = await isGoogleCalendarSyncEnabled(userId);
-  if (!syncEnabled) {
-    console.log(`Google Calendar sync not enabled for user ${userId}`);
-    return null;
-  }
-
   try {
-    // Fetch the event with all details
-    const event = await prisma.event.findUnique({
-      where: { id: eventId },
-      include: {
-        event_calendar: {
-          include: {
-            child: true,
-          },
-        },
-      },
-    });
+    // Use context data if provided, otherwise fetch (backward compatibility)
+    let event = context?.event;
+    let user = context?.user;
+    let existingSync = context?.existingSync;
 
     if (!event) {
-      throw new Error('Event not found');
+      // Fetch the event with all details
+      event = await prisma.event.findUnique({
+        where: { id: eventId },
+        include: {
+          event_calendar: {
+            include: {
+              child: true,
+            },
+          },
+        },
+      });
+
+      if (!event) {
+        throw new NotFoundError('Event', eventId);
+      }
     }
 
-    // Get user's Google Calendar ID
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { google_calendar_id: true },
-    });
+    if (!user) {
+      // Check if user has Google Calendar sync enabled
+      const syncEnabled = await isGoogleCalendarSyncEnabled(userId);
+      if (!syncEnabled) {
+        console.log(`Google Calendar sync not enabled for user ${userId}`);
+        return null;
+      }
+
+      // Get user's Google Calendar ID
+      user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { google_calendar_id: true },
+      });
+    }
 
     const calendarId = user?.google_calendar_id || 'primary';
 
-    // Get Google Calendar client
+    // Get Google Calendar client (may throw ConfigurationError or AuthenticationError)
     const calendar = await getGoogleCalendarClient(userId);
 
     // Format event for Google Calendar
@@ -83,56 +108,91 @@ export async function syncMainEventToGoogleCalendar(
       };
     }
 
-    // Check if THIS USER already has this event synced
-    const existingSync = await prisma.userGoogleEventSync.findUnique({
-      where: {
-        user_id_event_id: {
-          user_id: userId,
-          event_id: eventId,
+    // Check if THIS USER already has this event synced (use context if provided)
+    if (!existingSync) {
+      existingSync = await prisma.userGoogleEventSync.findUnique({
+        where: {
+          user_id_event_id: {
+            user_id: userId,
+            event_id: eventId,
+          },
         },
-      },
-    });
+      });
+    }
 
     if (existingSync && existingSync.google_event_id) {
       // Update existing event for this user
-      const response = await calendar.events.update({
-        calendarId,
-        eventId: existingSync.google_event_id,
-        requestBody: eventBody,
-      });
+      try {
+        const response = await calendar.events.update({
+          calendarId,
+          eventId: existingSync.google_event_id,
+          requestBody: eventBody,
+        });
 
-      console.log(`Updated main event ${eventId} in Google Calendar: ${existingSync.google_event_id}`);
-      return existingSync.google_event_id;
+        console.log(`Updated main event ${eventId} in user ${userId}'s Google Calendar: ${existingSync.google_event_id}`);
+        return existingSync.google_event_id;
+      } catch (error: any) {
+        // Handle Google API errors
+        const statusCode = error?.response?.status || 500;
+        throw new ExternalAPIError(
+          `Failed to update event in Google Calendar: ${getErrorMessage(error)}`,
+          'Google Calendar',
+          statusCode,
+          {
+            eventId,
+            userId,
+            googleEventId: existingSync.google_event_id,
+            operation: 'update',
+          }
+        );
+      }
     } else {
       // Create new event for this user
-      const response = await calendar.events.insert({
-        calendarId,
-        requestBody: eventBody,
-      });
-
-      const googleEventId = response.data.id;
-
-      if (!googleEventId) {
-        throw new Error('Failed to get Google Calendar event ID');
-      }
-
-      // Update event with Google Calendar event ID (for backward compatibility)
-      // Only set this if it's not already set (keeps the first user's ID)
-      if (!event.google_event_id) {
-        await prisma.event.update({
-          where: { id: eventId },
-          data: {
-            google_event_id: googleEventId,
-          },
+      try {
+        const response = await calendar.events.insert({
+          calendarId,
+          requestBody: eventBody,
         });
-      }
 
-      console.log(`Synced main event ${eventId} to Google Calendar: ${googleEventId}`);
-      return googleEventId;
+        const googleEventId = response.data.id;
+
+        if (!googleEventId) {
+          throw new ExternalAPIError(
+            'Google Calendar API did not return an event ID',
+            'Google Calendar',
+            500,
+            { eventId, userId, operation: 'insert' }
+          );
+        }
+
+        console.log(`Synced main event ${eventId} to user ${userId}'s Google Calendar: ${googleEventId}`);
+        return googleEventId;
+      } catch (error: any) {
+        // Re-throw our custom errors
+        if (error instanceof ExternalAPIError) {
+          throw error;
+        }
+
+        // Handle Google API errors
+        const statusCode = error?.response?.status || 500;
+        throw new ExternalAPIError(
+          `Failed to create event in Google Calendar: ${getErrorMessage(error)}`,
+          'Google Calendar',
+          statusCode,
+          {
+            eventId,
+            userId,
+            operation: 'insert',
+          }
+        );
+      }
     }
   } catch (error) {
-    console.error('Failed to sync main event to Google Calendar:', error);
+    // Log the error with context
+    console.error('Failed to sync main event to Google Calendar:', formatErrorForLogging(error as Error));
+
     // Don't throw - main event sync is optional and shouldn't fail the assignment
+    // But log detailed information for debugging
     return null;
   }
 }
@@ -153,14 +213,19 @@ export async function deleteMainEventFromGoogleCalendar(
   }
 
   try {
-    // Fetch the event
-    const event = await prisma.event.findUnique({
-      where: { id: eventId },
-      select: { google_event_id: true },
+    // Check if THIS USER has this event synced
+    const existingSync = await prisma.userGoogleEventSync.findUnique({
+      where: {
+        user_id_event_id: {
+          user_id: userId,
+          event_id: eventId,
+        },
+      },
     });
 
-    if (!event || !event.google_event_id) {
-      // Nothing to delete from Google Calendar
+    if (!existingSync || !existingSync.google_event_id) {
+      // This user doesn't have this event synced, nothing to delete
+      console.log(`User ${userId} doesn't have main event ${eventId} synced, skipping deletion`);
       return;
     }
 
@@ -178,20 +243,12 @@ export async function deleteMainEventFromGoogleCalendar(
     // Delete event from Google Calendar
     await calendar.events.delete({
       calendarId,
-      eventId: event.google_event_id,
+      eventId: existingSync.google_event_id,
     });
 
-    // Clear the google_event_id from database
-    await prisma.event.update({
-      where: { id: eventId },
-      data: {
-        google_event_id: null,
-      },
-    });
-
-    console.log(`Deleted main event ${eventId} from Google Calendar`);
+    console.log(`Deleted main event ${eventId} from user ${userId}'s Google Calendar`);
   } catch (error) {
-    console.error('Failed to delete main event from Google Calendar:', error);
+    console.error(`Failed to delete main event ${eventId} from user ${userId}'s Google Calendar:`, error);
     // Don't throw - this is a cleanup operation
   }
 }

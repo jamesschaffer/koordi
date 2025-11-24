@@ -1,4 +1,3 @@
-import { PrismaClient } from '@prisma/client';
 import { parseArrivalTime } from './arrivalTimeParser';
 import { calculateDriveTime, geocodeAddress, Coordinates } from './googleMapsService';
 import {
@@ -9,8 +8,7 @@ import {
   syncSupplementalEventToOptInMembers,
   deleteSupplementalEventFromOptInMembers,
 } from './multiUserSyncService';
-
-const prisma = new PrismaClient();
+import { prisma } from '../lib/prisma';
 
 export interface SupplementalEventResult {
   departure: any;

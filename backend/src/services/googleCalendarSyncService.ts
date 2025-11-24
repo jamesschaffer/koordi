@@ -1,51 +1,75 @@
-import { PrismaClient } from '@prisma/client';
 import { getGoogleCalendarClient, isGoogleCalendarSyncEnabled } from '../utils/googleCalendarClient';
+import { prisma } from '../lib/prisma';
+import {
+  NotFoundError,
+  ExternalAPIError,
+  getErrorMessage,
+  formatErrorForLogging,
+} from '../utils/errors';
 
-const prisma = new PrismaClient();
+/**
+ * Context for batch-optimized supplemental event sync operations
+ */
+export interface SupplementalSyncContext {
+  supplementalEvent?: any; // Supplemental event with parent_event.event_calendar.child included
+  user?: any; // User with google_calendar_id, google_calendar_sync_enabled, google_refresh_token_enc
+  existingSync?: any; // UserGoogleEventSync record
+}
 
 /**
  * Sync a supplemental event to Google Calendar
  * @param supplementalEventId - The supplemental event ID
  * @param userId - The user who owns the Google Calendar
+ * @param context - Optional pre-fetched data to eliminate N+1 queries
  * @returns The Google Calendar event ID
  */
 export async function syncSupplementalEventToGoogleCalendar(
   supplementalEventId: string,
-  userId: string
+  userId: string,
+  context?: SupplementalSyncContext
 ): Promise<string | null> {
-  // Check if user has Google Calendar sync enabled
-  const syncEnabled = await isGoogleCalendarSyncEnabled(userId);
-  if (!syncEnabled) {
-    console.log(`Google Calendar sync not enabled for user ${userId}`);
-    return null;
-  }
-
   try {
-    // Fetch the supplemental event with parent event details
-    const supplementalEvent = await prisma.supplementalEvent.findUnique({
-      where: { id: supplementalEventId },
-      include: {
-        parent_event: {
-          include: {
-            event_calendar: {
-              include: {
-                child: true,
+    // Use context data if provided, otherwise fetch (backward compatibility)
+    let supplementalEvent = context?.supplementalEvent;
+    let user = context?.user;
+    let existingSync = context?.existingSync;
+
+    if (!supplementalEvent) {
+      // Fetch the supplemental event with parent event details
+      supplementalEvent = await prisma.supplementalEvent.findUnique({
+        where: { id: supplementalEventId },
+        include: {
+          parent_event: {
+            include: {
+              event_calendar: {
+                include: {
+                  child: true,
+                },
               },
             },
           },
         },
-      },
-    });
+      });
 
-    if (!supplementalEvent) {
-      throw new Error('Supplemental event not found');
+      if (!supplementalEvent) {
+        throw new NotFoundError('SupplementalEvent', supplementalEventId);
+      }
     }
 
-    // Get user's Google Calendar ID
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { google_calendar_id: true },
-    });
+    if (!user) {
+      // Check if user has Google Calendar sync enabled
+      const syncEnabled = await isGoogleCalendarSyncEnabled(userId);
+      if (!syncEnabled) {
+        console.log(`Google Calendar sync not enabled for user ${userId}`);
+        return null;
+      }
+
+      // Get user's Google Calendar ID
+      user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { google_calendar_id: true },
+      });
+    }
 
     const calendarId = user?.google_calendar_id || 'primary';
 
@@ -94,15 +118,17 @@ export async function syncSupplementalEventToGoogleCalendar(
       };
     }
 
-    // Check if THIS USER already has this supplemental event synced
-    const existingSync = await prisma.userGoogleEventSync.findUnique({
-      where: {
-        user_id_supplemental_event_id: {
-          user_id: userId,
-          supplemental_event_id: supplementalEventId,
+    // Check if THIS USER already has this supplemental event synced (use context if provided)
+    if (!existingSync) {
+      existingSync = await prisma.userGoogleEventSync.findUnique({
+        where: {
+          user_id_supplemental_event_id: {
+            user_id: userId,
+            supplemental_event_id: supplementalEventId,
+          },
         },
-      },
-    });
+      });
+    }
 
     let googleEventId: string;
 
@@ -148,23 +174,15 @@ export async function syncSupplementalEventToGoogleCalendar(
         },
       });
 
-      // Update supplemental event with Google Calendar event ID (for backward compatibility)
-      // Only set this if it's not already set (keeps the first user's ID)
-      if (!supplementalEvent.google_event_id) {
-        await prisma.supplementalEvent.update({
-          where: { id: supplementalEventId },
-          data: {
-            google_event_id: googleEventId,
-          },
-        });
-      }
-
       console.log(`Synced supplemental event ${supplementalEventId} to user ${userId}'s Google Calendar: ${googleEventId}`);
     }
 
     return googleEventId;
   } catch (error) {
-    console.error('Failed to sync supplemental event to Google Calendar:', error);
+    console.error(
+      'Failed to sync supplemental event to Google Calendar:',
+      formatErrorForLogging(error as Error)
+    );
     // Don't throw - supplemental event sync is optional
     return null;
   }

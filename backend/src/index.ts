@@ -1,8 +1,11 @@
+// IMPORTANT: Load environment variables FIRST, before any other imports
+import dotenv from 'dotenv';
+dotenv.config();
+
 import express from 'express';
 import { createServer } from 'http';
 import cors from 'cors';
 import helmet from 'helmet';
-import dotenv from 'dotenv';
 import authRoutes from './routes/auth';
 import userRoutes from './routes/user';
 import eventCalendarRoutes from './routes/eventCalendar';
@@ -13,8 +16,6 @@ import invitationRoutes from './routes/invitations';
 import './workers/icsSync.worker'; // Initialize worker
 import { initializeScheduler } from './jobs/scheduler';
 import { initializeSocketServer } from './config/socket';
-
-dotenv.config();
 
 const app = express();
 const httpServer = createServer(app);

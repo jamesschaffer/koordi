@@ -1,7 +1,5 @@
-import { PrismaClient } from '@prisma/client';
 import { encrypt } from '../utils/encryption';
-
-const prisma = new PrismaClient();
+import { prisma } from '../lib/prisma';
 
 export interface GoogleUserProfile {
   id: string;
