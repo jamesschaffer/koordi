@@ -171,7 +171,7 @@ function AddressAutocomplete({
           id="address"
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          onBlur={handleBlur}
+          onBlur={() => setHasBlurred(true)}
           placeholder={placeholder}
           disabled={disabled}
         />
@@ -195,7 +195,7 @@ function AddressAutocomplete({
           id="address"
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          onBlur={handleBlur}
+          onBlur={() => setHasBlurred(true)}
           placeholder={placeholder}
           disabled={disabled}
         />
