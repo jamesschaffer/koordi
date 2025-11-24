@@ -29,21 +29,37 @@ class ApiClient {
       config.body = JSON.stringify(data);
     }
 
-    const response = await fetch(`${this.baseURL}${endpoint}`, config);
+    // Add timeout support (95 seconds for long-running calendar operations)
+    const timeout = 95000; // 95 seconds
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
 
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({
-        message: 'An error occurred',
-      }));
-      throw new Error(error.message || 'Request failed');
+    config.signal = controller.signal;
+
+    try {
+      const response = await fetch(`${this.baseURL}${endpoint}`, config);
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({
+          message: 'An error occurred',
+        }));
+        throw new Error(error.message || 'Request failed');
+      }
+
+      // Handle 204 No Content responses (no body to parse)
+      if (response.status === 204) {
+        return undefined as T;
+      }
+
+      return response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error('Request timeout - the operation took too long. Please try again.');
+      }
+      throw error;
     }
-
-    // Handle 204 No Content responses (no body to parse)
-    if (response.status === 204) {
-      return undefined as T;
-    }
-
-    return response.json();
   }
 
   async get<T>(endpoint: string, options?: RequestOptions): Promise<T> {

@@ -30,6 +30,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { OperationBlockingModal } from './OperationBlockingModal';
 import { toast } from 'sonner';
 import { Mail, UserPlus, Trash2, RefreshCw, UserMinus, Clock, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react';
 
@@ -46,6 +47,7 @@ export function MembersDialog({ calendarId, calendarName, isOwner, open, onOpenC
   const token = localStorage.getItem('auth_token') || '';
   const [inviteEmail, setInviteEmail] = useState('');
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
+  const [isRemovingMember, setIsRemovingMember] = useState(false);
 
   // Fetch members
   const { data: membersData, isLoading } = useQuery({
@@ -159,40 +161,22 @@ export function MembersDialog({ calendarId, calendarName, isOwner, open, onOpenC
   // Remove member mutation
   const removeMemberMutation = useMutation({
     mutationFn: (membershipId: string) => removeMember(membershipId, token),
-    onMutate: async (membershipId: string) => {
-      // Cancel outgoing queries
-      await queryClient.cancelQueries({ queryKey: ['calendar-members', calendarId] });
-      await queryClient.cancelQueries({ queryKey: ['calendars'] });
-
-      // Snapshot previous value
-      const previousMembers = queryClient.getQueryData<CalendarMembers>(['calendar-members', calendarId]);
-
-      // Optimistically remove the member
-      if (previousMembers) {
-        queryClient.setQueryData<CalendarMembers>(['calendar-members', calendarId], {
-          ...previousMembers,
-          members: previousMembers.members.filter((m) => m.id !== membershipId),
-        });
-      }
-
-      return { previousMembers };
+    onMutate: () => {
+      setIsRemovingMember(true);
+      setConfirmRemoveId(null);
     },
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['calendar-members', calendarId] });
+      queryClient.invalidateQueries({ queryKey: ['calendars'] });
+      setIsRemovingMember(false);
       setConfirmRemoveId(null);
       toast.success('Member removed');
     },
-    onError: (error: any, _membershipId, context) => {
-      // Rollback on error
-      if (context?.previousMembers) {
-        queryClient.setQueryData(['calendar-members', calendarId], context.previousMembers);
-      }
+    onError: (error: any) => {
+      setIsRemovingMember(false);
       toast.error('Failed to remove member', {
         description: error.message || 'Please try again',
       });
-    },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ['calendar-members', calendarId] });
-      queryClient.invalidateQueries({ queryKey: ['calendars'] });
     },
   });
 
@@ -442,6 +426,15 @@ export function MembersDialog({ calendarId, calendarName, isOwner, open, onOpenC
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Member removal blocking modal */}
+      <OperationBlockingModal
+        isOpen={isRemovingMember}
+        title="Removing member and cleaning up their Google Calendar"
+        message="Please wait while we remove all calendar events from this member's Google Calendar..."
+        showElapsedTime={true}
+        elapsedTimeThreshold={10}
+      />
     </>
   );
 }

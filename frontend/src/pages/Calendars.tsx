@@ -44,6 +44,8 @@ import {
 import { toast } from 'sonner';
 import { Pencil, Trash2, RefreshCw, AlertCircle, CheckCircle2, Users, MoreVertical } from 'lucide-react';
 import { MembersDialog } from '../components/MembersDialog';
+import { OperationBlockingModal } from '../components/OperationBlockingModal';
+import { MultiMemberDeleteError } from '../components/MultiMemberDeleteError';
 import { useAuth } from '../contexts/AuthContext';
 
 type DialogMode = 'add' | 'edit' | null;
@@ -58,6 +60,13 @@ function Calendars() {
   const [selectedCalendar, setSelectedCalendar] = useState<string | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [membersDialogCalendarId, setMembersDialogCalendarId] = useState<string | null>(null);
+
+  // Multi-member deletion error state
+  const [multiMemberError, setMultiMemberError] = useState<{ calendarId: string; memberCount: number } | null>(null);
+
+  // Blocking modal states
+  const [isCreating, setIsCreating] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // ICS Validation state
   const [icsUrl, setIcsUrl] = useState('');
@@ -104,12 +113,18 @@ function Calendars() {
   const createCalendarMutation = useMutation({
     mutationFn: (data: { name: string; ics_url: string; child_id: string; color?: string }) =>
       createCalendar(data, token),
+    onMutate: () => {
+      setIsCreating(true);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['calendars'] });
+      queryClient.invalidateQueries({ queryKey: ['events'] });
+      setIsCreating(false);
       resetDialog();
       toast.success('Calendar created successfully!');
     },
     onError: (error: any) => {
+      setIsCreating(false);
       toast.error('Failed to create calendar', {
         description: error.message || 'Please try again',
       });
@@ -135,13 +150,18 @@ function Calendars() {
   // Delete calendar mutation
   const deleteCalendarMutation = useMutation({
     mutationFn: (id: string) => deleteCalendar(id, token),
+    onMutate: () => {
+      setIsDeleting(true);
+      setDeleteConfirmId(null);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['calendars'] });
       queryClient.invalidateQueries({ queryKey: ['events'] });
-      setDeleteConfirmId(null);
+      setIsDeleting(false);
       toast.success('Calendar deleted successfully');
     },
     onError: (error: any) => {
+      setIsDeleting(false);
       toast.error('Failed to delete calendar', {
         description: error.message || 'Please try again',
       });
@@ -233,6 +253,26 @@ function Calendars() {
         color: formData.get('color') as string,
       });
     }
+  };
+
+  const handleDeleteCalendar = (calendarId: string) => {
+    const calendar = calendars?.find(c => c.id === calendarId);
+    if (!calendar) return;
+
+    // Check if calendar has multiple accepted members
+    const acceptedMembers = calendar.members?.filter(m => m.status === 'accepted') || [];
+
+    if (acceptedMembers.length > 1) {
+      // Show multi-member error dialog
+      setMultiMemberError({
+        calendarId,
+        memberCount: acceptedMembers.length,
+      });
+      return;
+    }
+
+    // Only owner remains - proceed with deletion confirmation
+    setDeleteConfirmId(calendarId);
   };
 
   const openEditDialog = (calendarId: string) => {
@@ -506,7 +546,7 @@ function Calendars() {
                         Edit
                       </DropdownMenuItem>
                       <DropdownMenuItem
-                        onClick={() => setDeleteConfirmId(calendar.id)}
+                        onClick={() => handleDeleteCalendar(calendar.id)}
                         className="text-destructive focus:text-destructive"
                       >
                         <Trash2 className="h-4 w-4 mr-2" />
@@ -589,6 +629,36 @@ function Calendars() {
           onOpenChange={(open) => !open && setMembersDialogCalendarId(null)}
         />
       )}
+
+      {/* Multi-member deletion error */}
+      <MultiMemberDeleteError
+        isOpen={multiMemberError !== null}
+        memberCount={multiMemberError?.memberCount || 0}
+        onClose={() => setMultiMemberError(null)}
+        onViewMembers={() => {
+          if (multiMemberError) {
+            setMembersDialogCalendarId(multiMemberError.calendarId);
+          }
+        }}
+      />
+
+      {/* Calendar creation blocking modal */}
+      <OperationBlockingModal
+        isOpen={isCreating}
+        title="Importing calendar and syncing events to Google Calendar"
+        message="This may take up to 90 seconds depending on calendar size. Please do not close this window."
+        showElapsedTime={true}
+        elapsedTimeThreshold={15}
+      />
+
+      {/* Calendar deletion blocking modal */}
+      <OperationBlockingModal
+        isOpen={isDeleting}
+        title="Deleting calendar and removing events from Google Calendar"
+        message="Please wait while we clean up your Google Calendar events..."
+        showElapsedTime={true}
+        elapsedTimeThreshold={10}
+      />
     </div>
   );
 }

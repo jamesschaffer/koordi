@@ -85,9 +85,10 @@ router.post('/', async (req: Request, res: Response) => {
       console.log(`[POST /calendars] Starting initial sync for calendar ${calendar.id}`);
 
       // Add timeout to prevent request hanging indefinitely
+      // 90 seconds allows for large calendars and Google Calendar API batch operations
       const syncPromise = icsSyncService.syncCalendar(calendar.id);
       const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('Sync timeout after 30 seconds')), 30000)
+        setTimeout(() => reject(new Error('Sync timeout after 90 seconds')), 90000)
       );
 
       const syncResult = await Promise.race([syncPromise, timeoutPromise]);
@@ -169,6 +170,23 @@ router.delete('/:id', async (req: Request, res: Response) => {
     const userId = req.user?.userId;
     if (!userId) {
       return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    // Validate that only the owner remains before allowing deletion
+    const { prisma } = await import('../lib/prisma');
+    const acceptedMemberCount = await prisma.eventCalendarMembership.count({
+      where: {
+        event_calendar_id: req.params.id,
+        status: 'accepted',
+      },
+    });
+
+    if (acceptedMemberCount > 1) {
+      return res.status(400).json({
+        error: 'Cannot delete calendar with multiple members',
+        details: `This calendar has ${acceptedMemberCount} members. Remove all other members before deleting.`,
+        memberCount: acceptedMemberCount,
+      });
     }
 
     await eventCalendarService.deleteEventCalendar(req.params.id, userId);
