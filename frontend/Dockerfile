@@ -12,6 +12,10 @@ RUN npm ci
 # Copy source code
 COPY . .
 
+# Accept build arguments for environment variables
+ARG VITE_API_URL
+ARG VITE_GOOGLE_MAPS_API_KEY
+
 # Build for production
 RUN npm run build
 
