@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { getMe, updateAddress, updateComfortBuffer, updateRetention, updateGoogleCalendarSync, deleteAccount } from '../lib/api-users';
+import { getMe, updateAddress, updateComfortBuffer, updateRetention, deleteAccount } from '../lib/api-users';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
@@ -34,7 +34,6 @@ function Settings() {
   const [longitude, setLongitude] = useState<number | undefined>();
   const [comfortBuffer, setComfortBuffer] = useState<number[]>([15]);
   const [keepSupplemental, setKeepSupplemental] = useState(false);
-  const [googleCalendarSync, setGoogleCalendarSync] = useState(false);
   const [addressSaveStatus, setAddressSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [bufferSaveStatus, setBufferSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [isAddressValid, setIsAddressValid] = useState(true);
@@ -51,7 +50,6 @@ function Settings() {
       setAddress(user.home_address || '');
       setComfortBuffer([user.comfort_buffer_minutes]);
       setKeepSupplemental(user.keep_supplemental_events);
-      setGoogleCalendarSync(user.google_calendar_sync_enabled);
     }
   }, [user]);
 
@@ -110,20 +108,6 @@ function Settings() {
     },
   });
 
-  // Update Google Calendar sync mutation
-  const updateGoogleCalendarSyncMutation = useMutation({
-    mutationFn: (enabled: boolean) => updateGoogleCalendarSync(enabled, token),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['user'] });
-      toast.success('Google Calendar sync setting updated!');
-    },
-    onError: (error: any) => {
-      toast.error('Failed to update Google Calendar sync', {
-        description: error.message || 'Please try again',
-      });
-    },
-  });
-
   // Delete account mutation
   const deleteAccountMutation = useMutation({
     mutationFn: () => deleteAccount(token),
@@ -147,11 +131,6 @@ function Settings() {
   const handleRetentionToggle = (checked: boolean) => {
     setKeepSupplemental(checked);
     updateRetentionMutation.mutate(checked);
-  };
-
-  const handleGoogleCalendarSyncToggle = (checked: boolean) => {
-    setGoogleCalendarSync(checked);
-    updateGoogleCalendarSyncMutation.mutate(checked);
   };
 
   if (isLoading) {
@@ -270,33 +249,6 @@ function Settings() {
             <p className="text-sm text-muted-foreground">
               This adds extra time to your departure time calculations
             </p>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Google Calendar Sync Section */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Google Calendar Sync</CardTitle>
-          <CardDescription>
-            Control whether events sync to your Google Calendar
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="flex items-center justify-between">
-            <div className="space-y-0.5">
-              <Label htmlFor="google-calendar-sync">Sync to Google Calendar</Label>
-              <p className="text-sm text-muted-foreground">
-                {googleCalendarSync
-                  ? 'Events will automatically sync to your Google Calendar'
-                  : 'Events will only show in the Koordie dashboard'}
-              </p>
-            </div>
-            <Switch
-              id="google-calendar-sync"
-              checked={googleCalendarSync}
-              onCheckedChange={handleGoogleCalendarSyncToggle}
-            />
           </div>
         </CardContent>
       </Card>

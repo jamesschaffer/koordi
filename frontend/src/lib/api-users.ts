@@ -59,14 +59,6 @@ export const updateRetention = async (keepSupplemental: boolean, token: string):
   });
 };
 
-export const updateGoogleCalendarSync = async (enabled: boolean, token: string): Promise<User> => {
-  return apiClient.patch<User>('/users/me/settings/google-calendar-sync', { enabled }, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-  });
-};
-
 export const deleteAccount = async (token: string): Promise<void> => {
   return apiClient.delete('/users/me', {
     headers: {
