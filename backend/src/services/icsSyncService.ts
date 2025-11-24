@@ -275,8 +275,9 @@ export const syncAllCalendars = async (): Promise<{
 
 /**
  * Sync all events from a calendar to all members' Google Calendars
+ * Used when: new calendar created, ICS sync completes, or new member accepts invitation
  */
-async function syncCalendarEventsToMembers(calendarId: string): Promise<void> {
+export async function syncCalendarEventsToMembers(calendarId: string): Promise<void> {
   console.log(`[syncCalendarEventsToMembers] Starting sync for calendar ${calendarId}`);
 
   // Get all events for this calendar

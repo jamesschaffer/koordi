@@ -4,6 +4,7 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { getPendingInvitations, acceptInvitation, declineInvitation } from '../lib/api-calendars';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
+import { OperationBlockingModal } from '@/components/OperationBlockingModal';
 import { toast } from 'sonner';
 import { Calendar, CheckCircle2, XCircle, User, Baby, Clock } from 'lucide-react';
 
@@ -11,7 +12,7 @@ export default function AcceptInvitation() {
   const { token } = useParams<{ token: string }>();
   const navigate = useNavigate();
   const authToken = localStorage.getItem('auth_token') || '';
-  const [processing, setProcessing] = useState(false);
+  const [isAccepting, setIsAccepting] = useState(false);
 
   // Fetch all pending invitations to find the one matching this token
   const { data: invitations, isLoading } = useQuery({
@@ -22,22 +23,26 @@ export default function AcceptInvitation() {
 
   const invitation = invitations?.find((inv) => inv.invitation_token === token);
 
-  // Accept invitation mutation
+  // Accept invitation mutation with blocking modal during sync
   const acceptMutation = useMutation({
     mutationFn: () => acceptInvitation(token!, authToken),
+    onMutate: () => {
+      setIsAccepting(true);
+    },
     onSuccess: () => {
-      toast.success('Invitation accepted!', {
-        description: 'You now have access to this calendar',
+      setIsAccepting(false);
+      toast.success('Calendar added!', {
+        description: 'All events have been synced to your Google Calendar',
       });
       setTimeout(() => {
         navigate('/calendars');
       }, 2000);
     },
     onError: (error: any) => {
+      setIsAccepting(false);
       toast.error('Failed to accept invitation', {
         description: error.message || 'Please try again',
       });
-      setProcessing(false);
     },
   });
 
@@ -54,17 +59,14 @@ export default function AcceptInvitation() {
       toast.error('Failed to decline invitation', {
         description: error.message || 'Please try again',
       });
-      setProcessing(false);
     },
   });
 
   const handleAccept = () => {
-    setProcessing(true);
     acceptMutation.mutate();
   };
 
   const handleDecline = () => {
-    setProcessing(true);
     declineMutation.mutate();
   };
 
@@ -187,7 +189,7 @@ export default function AcceptInvitation() {
             variant="outline"
             className="flex-1"
             onClick={handleDecline}
-            disabled={processing}
+            disabled={isAccepting || declineMutation.isPending}
           >
             <XCircle className="h-4 w-4 mr-2" />
             Decline
@@ -195,13 +197,22 @@ export default function AcceptInvitation() {
           <Button
             className="flex-1"
             onClick={handleAccept}
-            disabled={processing}
+            disabled={isAccepting || acceptMutation.isPending}
           >
             <CheckCircle2 className="h-4 w-4 mr-2" />
-            {processing ? 'Accepting...' : 'Accept Invitation'}
+            {isAccepting ? 'Accepting...' : 'Accept Invitation'}
           </Button>
         </CardFooter>
       </Card>
+
+      {/* Blocking modal during event sync */}
+      <OperationBlockingModal
+        isOpen={isAccepting}
+        title="Syncing calendar events to your Google Calendar"
+        message="Please wait while we add all calendar events to your Google Calendar. This ensures you see all events immediately."
+        showElapsedTime={true}
+        elapsedTimeThreshold={10}
+      />
     </div>
   );
 }

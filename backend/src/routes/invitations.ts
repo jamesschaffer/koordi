@@ -15,6 +15,7 @@ import {
   sendBulkInvitations,
 } from '../services/invitationService';
 import { SocketEvent, emitToCalendar } from '../config/socket';
+import * as icsSyncService from '../services/icsSyncService';
 
 const router = express.Router();
 
@@ -240,7 +241,7 @@ router.get('/invitations/pending', authenticateToken, async (req: Request, res: 
 
 /**
  * POST /api/invitations/:token/accept
- * Accept an invitation
+ * Accept an invitation and sync all calendar events to the new member's Google Calendar
  */
 router.post('/invitations/:token/accept', authenticateToken, async (req: Request, res: Response) => {
   try {
@@ -251,7 +252,21 @@ router.post('/invitations/:token/accept', authenticateToken, async (req: Request
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
+    // Accept the invitation (updates membership status to 'accepted')
     const membership = await acceptInvitation(token, userId);
+
+    console.log(`[acceptInvitation] User ${userId} accepted invitation for calendar ${membership.event_calendar.id}`);
+
+    // Sync all existing calendar events to the new member's Google Calendar
+    // Use the same timeout pattern as calendar creation (90 seconds)
+    const syncPromise = icsSyncService.syncCalendarEventsToMembers(membership.event_calendar.id);
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('Event sync timeout after 90 seconds')), 90000)
+    );
+
+    await Promise.race([syncPromise, timeoutPromise]);
+
+    console.log(`[acceptInvitation] Successfully synced all events to new member ${userId}`);
 
     res.json(membership);
   } catch (error) {
