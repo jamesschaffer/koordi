@@ -16,13 +16,12 @@ function Login() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center px-4">
       <Card className="max-w-md w-full">
-        <CardHeader className="text-center space-y-2">
+        <CardHeader className="text-center space-y-1">
           <CardTitle className="text-4xl">Koordie</CardTitle>
-          <CardDescription className="text-base">Family Scheduling Assistant</CardDescription>
         </CardHeader>
 
         <CardContent className="space-y-6">
-          <p className="text-muted-foreground text-center mt-4">
+          <p className="text-muted-foreground text-center">
             Sign in to manage your family's schedule
           </p>
 
@@ -54,7 +53,24 @@ function Login() {
           </Button>
 
           <p className="text-sm text-muted-foreground text-center">
-            By signing in, you agree to our Terms of Service and Privacy Policy
+            By signing in, you agree to our{' '}
+            <a
+              href="https://github.com/jamesschaffer/koordi/blob/main/docs/TERMS_OF_SERVICE.md"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-primary hover:underline"
+            >
+              Terms of Service
+            </a>
+            {' '}and{' '}
+            <a
+              href="https://github.com/jamesschaffer/koordi/blob/main/docs/PRIVACY_POLICY.md"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-primary hover:underline"
+            >
+              Privacy Policy
+            </a>
           </p>
 
           <div className="pt-6 border-t">
