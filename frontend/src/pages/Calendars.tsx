@@ -579,7 +579,23 @@ function Calendars() {
                     <div className="flex items-center justify-between">
                       <span>Members:</span>
                       <span className="font-medium text-foreground text-right">
-                        {calendar.members.map((m) => m.user.name).join(', ')}
+                        {(() => {
+                          const accepted = calendar.members.filter(m => m.status === 'accepted');
+                          const pending = calendar.members.filter(m => m.status === 'pending');
+                          const parts = [];
+
+                          // Add accepted member names
+                          if (accepted.length > 0) {
+                            parts.push(accepted.map(m => m.user.name).join(', '));
+                          }
+
+                          // Add pending invite count
+                          if (pending.length > 0) {
+                            parts.push(`${pending.length} pending ${pending.length === 1 ? 'invite' : 'invites'}`);
+                          }
+
+                          return parts.join(', ');
+                        })()}
                       </span>
                     </div>
                   )}

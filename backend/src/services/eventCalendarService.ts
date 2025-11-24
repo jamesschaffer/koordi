@@ -38,9 +38,7 @@ export const getUserEventCalendars = async (userId: string) => {
         },
       },
       members: {
-        where: {
-          status: 'accepted',
-        },
+        // Include all members (accepted and pending) for display
         include: {
           user: {
             select: {

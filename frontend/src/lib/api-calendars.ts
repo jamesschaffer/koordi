@@ -22,6 +22,8 @@ export interface EventCalendar {
     email: string;
   };
   members: Array<{
+    id: string;
+    status: 'pending' | 'accepted' | 'declined';
     user: {
       id: string;
       name: string;

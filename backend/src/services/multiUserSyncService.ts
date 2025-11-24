@@ -128,6 +128,15 @@ export async function syncMainEventToAllMembers(eventId: string): Promise<void> 
 
   // Add members
   event.event_calendar.members.forEach((m) => {
+    console.log(`[DEBUG] Member data:`, {
+      user_id: m.user_id,
+      user_exists: !!m.user,
+      user_data: m.user ? {
+        id: m.user.id,
+        sync_enabled: m.user.google_calendar_sync_enabled,
+        has_refresh_token: !!m.user.google_refresh_token_enc,
+      } : null,
+    });
     if (m.user && m.user_id) {
       userMap.set(m.user.id, m.user);
       memberIds.push(m.user.id);
@@ -136,6 +145,14 @@ export async function syncMainEventToAllMembers(eventId: string): Promise<void> 
 
   // Add owner if not already in members
   const owner = event.event_calendar.owner;
+  console.log(`[DEBUG] Owner data:`, {
+    owner_exists: !!owner,
+    owner_data: owner ? {
+      id: owner.id,
+      sync_enabled: owner.google_calendar_sync_enabled,
+      has_refresh_token: !!owner.google_refresh_token_enc,
+    } : null,
+  });
   if (owner && !memberIds.includes(owner.id)) {
     userMap.set(owner.id, owner);
     memberIds.push(owner.id);
@@ -162,9 +179,24 @@ export async function syncMainEventToAllMembers(eventId: string): Promise<void> 
       try {
         const user = userMap.get(userId);
 
+        console.log(`[DEBUG] Syncing to user ${userId}:`, {
+          user_exists: !!user,
+          user_data: user ? {
+            id: user.id,
+            sync_enabled: user.google_calendar_sync_enabled,
+            sync_enabled_type: typeof user.google_calendar_sync_enabled,
+            has_refresh_token: !!user.google_refresh_token_enc,
+            refresh_token_type: typeof user.google_refresh_token_enc,
+          } : null,
+        });
+
         // Check if user has sync enabled (using batch-fetched data)
         if (!user || !user.google_calendar_sync_enabled || !user.google_refresh_token_enc) {
-          console.log(`Google Calendar sync not enabled for user ${userId}`);
+          console.log(`Google Calendar sync not enabled for user ${userId}`, {
+            user_is_falsy: !user,
+            sync_enabled_is_falsy: !user?.google_calendar_sync_enabled,
+            refresh_token_is_falsy: !user?.google_refresh_token_enc,
+          });
           return;
         }
 
