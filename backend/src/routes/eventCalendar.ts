@@ -2,6 +2,7 @@ import express, { Request, Response } from 'express';
 import { authenticateToken } from '../middleware/auth';
 import * as eventCalendarService from '../services/eventCalendarService';
 import * as icsService from '../services/icsService';
+import * as icsSyncService from '../services/icsSyncService';
 
 const router = express.Router();
 
@@ -78,13 +79,52 @@ router.post('/', async (req: Request, res: Response) => {
       color,
     });
 
-    // Trigger initial sync asynchronously (don't wait for completion)
-    // This allows the user to see their calendar immediately while events load in background
-    icsService.syncEventCalendar(calendar.id).catch((error) => {
-      console.error(`Failed to auto-sync new calendar ${calendar.id}:`, error);
-    });
+    // Perform initial sync synchronously to ensure events are available immediately
+    // This prevents race conditions where the frontend queries for events before sync completes
+    try {
+      console.log(`[POST /calendars] Starting initial sync for calendar ${calendar.id}`);
 
-    res.status(201).json(calendar);
+      // Add timeout to prevent request hanging indefinitely
+      const syncPromise = icsSyncService.syncCalendar(calendar.id);
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Sync timeout after 30 seconds')), 30000)
+      );
+
+      const syncResult = await Promise.race([syncPromise, timeoutPromise]);
+
+      if (!syncResult.success) {
+        console.error(`[POST /calendars] Sync failed for calendar ${calendar.id}:`, syncResult.error);
+        // Delete the calendar since sync failed
+        await eventCalendarService.deleteEventCalendar(calendar.id, userId);
+        return res.status(500).json({
+          error: 'Failed to sync calendar events',
+          details: syncResult.error
+        });
+      }
+
+      console.log(`[POST /calendars] Successfully synced calendar ${calendar.id}: ${syncResult.eventsAdded} events added`);
+
+      res.status(201).json({
+        ...calendar,
+        initialSync: {
+          eventsAdded: syncResult.eventsAdded,
+          eventsUpdated: syncResult.eventsUpdated,
+          eventsDeleted: syncResult.eventsDeleted,
+        }
+      });
+    } catch (error: any) {
+      console.error(`[POST /calendars] Sync error for calendar ${calendar.id}:`, error);
+      // Clean up calendar if sync fails
+      try {
+        await eventCalendarService.deleteEventCalendar(calendar.id, userId);
+      } catch (deleteError) {
+        console.error(`[POST /calendars] Failed to delete calendar after sync error:`, deleteError);
+      }
+      return res.status(500).json({
+        error: 'Failed to sync calendar events',
+        details: error.message
+      });
+    }
   } catch (error) {
     console.error('Create calendar error:', error);
     res.status(500).json({ error: 'Failed to create calendar' });
@@ -179,10 +219,13 @@ router.post('/:id/sync', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Calendar not found' });
     }
 
-    const result = await icsService.syncEventCalendar(req.params.id);
+    // Use icsSyncService which syncs to both database AND Google Calendar
+    const result = await icsSyncService.syncCalendar(req.params.id);
     res.json({
       message: 'Sync completed',
-      ...result,
+      created: result.eventsAdded,
+      updated: result.eventsUpdated,
+      deleted: result.eventsDeleted,
     });
   } catch (error: any) {
     console.error('Sync calendar error:', error);
