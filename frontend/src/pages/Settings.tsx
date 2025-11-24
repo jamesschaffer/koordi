@@ -36,6 +36,7 @@ function Settings() {
   const [keepSupplemental, setKeepSupplemental] = useState(false);
   const [addressSaveStatus, setAddressSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [bufferSaveStatus, setBufferSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [isAddressValid, setIsAddressValid] = useState(true);
 
   // Fetch user data
   const { data: user, isLoading } = useQuery({
@@ -196,6 +197,9 @@ function Settings() {
             value={address}
             onChange={setAddress}
             onPlaceSelect={({ address: addr, latitude: lat, longitude: lng }) => {
+              // Guard clause: only proceed if we have valid data
+              if (!addr || !lat || !lng) return;
+
               setAddress(addr);
               setLatitude(lat);
               setLongitude(lng);
@@ -204,6 +208,7 @@ function Settings() {
                 updateAddressMutation.mutate();
               }, 100);
             }}
+            onValidationChange={setIsAddressValid}
             disabled={addressSaveStatus === 'saving'}
           />
         </CardContent>

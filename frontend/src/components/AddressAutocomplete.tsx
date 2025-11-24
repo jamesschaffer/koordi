@@ -10,6 +10,7 @@ interface AddressAutocompleteProps {
   value: string;
   onChange: (value: string) => void;
   onPlaceSelect: (place: { address: string; latitude: number; longitude: number }) => void;
+  onValidationChange?: (isValid: boolean) => void;
   label?: string;
   placeholder?: string;
   disabled?: boolean;
@@ -24,6 +25,7 @@ function AddressAutocomplete({
   value,
   onChange,
   onPlaceSelect,
+  onValidationChange,
   label = "Address",
   placeholder = "123 Main St, City, State ZIP",
   disabled = false,
@@ -32,8 +34,11 @@ function AddressAutocomplete({
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [open, setOpen] = useState(false);
   const [isLoadingLibrary, setIsLoadingLibrary] = useState(true);
+  const [isValidSelection, setIsValidSelection] = useState(true); // Assume valid initially (for existing addresses)
+  const [hasBlurred, setHasBlurred] = useState(false);
   const placesLibRef = useRef<typeof google.maps.places | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const { isLoaded, loadError } = useLoadScript({
     googleMapsApiKey: apiKey || '',
@@ -107,6 +112,10 @@ function AddressAutocomplete({
         const latitude = (typeof lat === 'function' ? lat() : lat) as number;
         const longitude = (typeof lng === 'function' ? lng() : lng) as number;
 
+        // Mark as valid selection
+        setIsValidSelection(true);
+
+        // Update parent with selected address
         onChange(formattedAddress);
         onPlaceSelect({
           address: formattedAddress,
@@ -115,6 +124,7 @@ function AddressAutocomplete({
         });
       }
 
+      // Close dropdown and clear suggestions
       setOpen(false);
       setSuggestions([]);
     } catch (error) {
@@ -122,16 +132,35 @@ function AddressAutocomplete({
     }
   };
 
-  // Debounce input changes
-  useEffect(() => {
-    const timeoutId = setTimeout(() => {
-      if (value && !isLoadingLibrary) {
-        fetchSuggestions(value);
+  // Imperative debounced fetch function
+  const debouncedFetchSuggestions = useCallback((input: string) => {
+    // Clear existing timer
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+
+    // Set new timer
+    debounceTimerRef.current = setTimeout(() => {
+      if (input && !isLoadingLibrary && placesLibRef.current) {
+        fetchSuggestions(input);
       }
     }, 300);
+  }, [fetchSuggestions, isLoadingLibrary]);
 
-    return () => clearTimeout(timeoutId);
-  }, [value, fetchSuggestions, isLoadingLibrary]);
+  // Cleanup timer on unmount
+  useEffect(() => {
+    return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+    };
+  }, []);
+
+  // Notify parent of validation state changes (valid = has selection AND has value)
+  useEffect(() => {
+    const isValid = isValidSelection && value.length > 0;
+    onValidationChange?.(isValid);
+  }, [isValidSelection, value, onValidationChange]);
 
   // Show error if API key is missing or invalid
   if (!apiKey || apiKey === 'your_maps_api_key_here') {
@@ -192,22 +221,46 @@ function AddressAutocomplete({
     );
   }
 
+  const showError = !isValidSelection && hasBlurred && value.length > 0;
+  const showRequiredError = !value && hasBlurred;
+
   return (
     <div className="space-y-2">
-      <Label htmlFor="address">{label}</Label>
+      <Label
+        htmlFor="address"
+        className={showError || showRequiredError ? "text-destructive" : ""}
+      >
+        {label}
+      </Label>
       <div className="relative">
         <Input
           ref={inputRef}
           id="address"
           value={value}
           onChange={(e) => {
-            onChange(e.target.value);
-            if (!e.target.value.trim()) {
+            const newValue = e.target.value;
+
+            // Update parent state
+            onChange(newValue);
+
+            // Mark as invalid when user types (must select from dropdown)
+            setIsValidSelection(false);
+
+            if (newValue.trim()) {
+              // User is typing - fetch suggestions imperatively
+              debouncedFetchSuggestions(newValue);
+            } else {
+              // User cleared the field
               setOpen(false);
               setSuggestions([]);
+              // Clear any pending debounce timers
+              if (debounceTimerRef.current) {
+                clearTimeout(debounceTimerRef.current);
+              }
             }
           }}
           onBlur={() => {
+            setHasBlurred(true);
             // Delay to allow click on suggestion
             setTimeout(() => {
               setOpen(false);
@@ -221,6 +274,10 @@ function AddressAutocomplete({
           placeholder={placeholder}
           disabled={disabled}
           autoComplete="off"
+          aria-invalid={showError || showRequiredError}
+          aria-describedby={showError || showRequiredError ? "address-error" : undefined}
+          className={showError || showRequiredError ? "border-destructive focus-visible:ring-destructive" : ""}
+          required
         />
         {open && suggestions.length > 0 && (
           <div className="absolute z-50 w-full mt-1 bg-white border border-gray-200 rounded-md shadow-lg max-h-60 overflow-auto">
@@ -236,6 +293,16 @@ function AddressAutocomplete({
           </div>
         )}
       </div>
+      {showError && (
+        <p id="address-error" className="text-sm font-medium text-destructive">
+          Please select a valid address from the dropdown
+        </p>
+      )}
+      {showRequiredError && (
+        <p className="text-sm font-medium text-destructive">
+          Address is required
+        </p>
+      )}
     </div>
   );
 }

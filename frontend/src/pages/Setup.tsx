@@ -18,6 +18,7 @@ function Setup() {
   const [address, setAddress] = useState('');
   const [latitude, setLatitude] = useState<number | undefined>();
   const [longitude, setLongitude] = useState<number | undefined>();
+  const [isAddressValid, setIsAddressValid] = useState(false);
 
   // Update address mutation
   const updateAddressMutation = useMutation({
@@ -76,6 +77,7 @@ function Setup() {
                     setLatitude(lat);
                     setLongitude(lng);
                   }}
+                  onValidationChange={setIsAddressValid}
                   label="Home Address *"
                   placeholder="Enter your home address"
                 />
@@ -87,7 +89,7 @@ function Setup() {
                 type="submit"
                 className="flex-1"
                 size="lg"
-                disabled={!address || !latitude || !longitude || updateAddressMutation.isPending}
+                disabled={!isAddressValid || !address || !latitude || !longitude || updateAddressMutation.isPending}
               >
                 {updateAddressMutation.isPending ? 'Setting up...' : 'Complete Setup'}
               </Button>
