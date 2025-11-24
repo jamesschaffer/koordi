@@ -38,7 +38,7 @@ function AddressAutocomplete({
   const [hasBlurred, setHasBlurred] = useState(false);
   const placesLibRef = useRef<typeof google.maps.places | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const debounceTimerRef = useRef<number | null>(null);
 
   const { isLoaded, loadError } = useLoadScript({
     googleMapsApiKey: apiKey || '',
@@ -171,7 +171,7 @@ function AddressAutocomplete({
           id="address"
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          onBlur={onBlur}
+          onBlur={handleBlur}
           placeholder={placeholder}
           disabled={disabled}
         />
@@ -195,7 +195,7 @@ function AddressAutocomplete({
           id="address"
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          onBlur={onBlur}
+          onBlur={handleBlur}
           placeholder={placeholder}
           disabled={disabled}
         />

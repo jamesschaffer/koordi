@@ -36,7 +36,7 @@ function Settings() {
   const [keepSupplemental, setKeepSupplemental] = useState(false);
   const [addressSaveStatus, setAddressSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [bufferSaveStatus, setBufferSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
-  const [isAddressValid, setIsAddressValid] = useState(true);
+  const [, setIsAddressValid] = useState(true);
 
   // Fetch user data
   const { data: user, isLoading } = useQuery({
