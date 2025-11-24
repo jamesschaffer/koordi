@@ -72,9 +72,23 @@ export const findOrCreateUser = async (
   let user = await findUserByEmail(profile.email);
 
   if (user) {
-    // Update existing user with new tokens if provided
+    // For existing users, we need to handle two scenarios:
+    // 1. New refresh token provided (first auth or re-auth with consent)
+    // 2. No refresh token (returning user with existing token)
+
     if (refreshToken && calendarId) {
+      // Update tokens and ensure sync is enabled
       user = await updateUserTokens(user.id, refreshToken, calendarId);
+    } else if (calendarId) {
+      // Returning user: No new refresh token, but update calendar ID and ensure sync is enabled
+      // This fixes the bug where returning users had google_calendar_sync_enabled = false
+      user = await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          google_calendar_id: calendarId,
+          google_calendar_sync_enabled: true, // Ensure sync is enabled for returning users
+        },
+      });
     }
   } else {
     // Create new user

@@ -156,4 +156,39 @@ router.patch('/me/settings/retention', authenticateToken, async (req: Request, r
   }
 });
 
+/**
+ * PATCH /api/users/me/settings/google-calendar-sync
+ * Toggle Google Calendar sync on/off
+ */
+router.patch('/me/settings/google-calendar-sync', authenticateToken, async (req: Request, res: Response) => {
+  try {
+    const userId = req.user?.userId;
+
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const { enabled } = req.body;
+
+    if (typeof enabled !== 'boolean') {
+      return res.status(400).json({ error: 'enabled must be a boolean' });
+    }
+
+    // Import prisma
+    const { prisma } = await import('../lib/prisma');
+
+    const updatedUser = await prisma.user.update({
+      where: { id: userId },
+      data: { google_calendar_sync_enabled: enabled },
+    });
+
+    const { google_refresh_token_enc, ...safeUser } = updatedUser;
+
+    res.json(safeUser);
+  } catch (error) {
+    console.error('Update Google Calendar sync error:', error);
+    res.status(500).json({ error: 'Failed to update Google Calendar sync setting' });
+  }
+});
+
 export default router;

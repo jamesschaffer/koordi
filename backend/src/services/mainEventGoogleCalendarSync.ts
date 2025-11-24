@@ -54,18 +54,21 @@ export async function syncMainEventToGoogleCalendar(
     }
 
     if (!user) {
-      // Check if user has Google Calendar sync enabled
-      const syncEnabled = await isGoogleCalendarSyncEnabled(userId);
-      if (!syncEnabled) {
+      // Fetch user data if not provided in context (backward compatibility)
+      user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: {
+          google_calendar_id: true,
+          google_calendar_sync_enabled: true,
+          google_refresh_token_enc: true,
+        },
+      });
+
+      // Check if sync is enabled
+      if (!user || !user.google_calendar_sync_enabled || !user.google_refresh_token_enc) {
         console.log(`Google Calendar sync not enabled for user ${userId}`);
         return null;
       }
-
-      // Get user's Google Calendar ID
-      user = await prisma.user.findUnique({
-        where: { id: userId },
-        select: { google_calendar_id: true },
-      });
     }
 
     const calendarId = user?.google_calendar_id || 'primary';
