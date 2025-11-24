@@ -257,7 +257,7 @@ describe('Invitation Service - Critical Fixes', () => {
         origin_address: testUser2.home_address,
         origin_lat: testUser2.home_latitude,
         origin_lng: testUser2.home_longitude,
-        destination_address: event.location,
+        destination_address: event.location!,
         destination_lat: 37.7749,
         destination_lng: -122.4194,
         drive_time_minutes: 5,
