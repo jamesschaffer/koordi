@@ -273,6 +273,52 @@ export async function deleteMainEventFromAllMembers(eventId: string): Promise<vo
 }
 
 /**
+ * Delete all supplemental events for a parent event from all calendar members' Google Calendars
+ * @param eventId - The parent event ID
+ */
+export async function deleteSupplementalEventsFromAllMembers(eventId: string): Promise<void> {
+  // Get all supplemental events for this parent event
+  const supplementalEvents = await prisma.supplementalEvent.findMany({
+    where: { parent_event_id: eventId },
+    select: { id: true, type: true },
+  });
+
+  console.log(`Deleting ${supplementalEvents.length} supplemental events for parent event ${eventId} from all users' Google Calendars`);
+
+  // For each supplemental event, delete from all users' Google Calendars
+  for (const suppEvent of supplementalEvents) {
+    // Get all syncs for this supplemental event
+    const syncs = await prisma.userGoogleEventSync.findMany({
+      where: {
+        supplemental_event_id: suppEvent.id,
+        sync_type: 'supplemental',
+      },
+    });
+
+    console.log(`Deleting supplemental event ${suppEvent.id} (${suppEvent.type}) from ${syncs.length} users' Google Calendars`);
+
+    // Delete from each user's calendar in parallel
+    await Promise.all(
+      syncs.map(async (sync) => {
+        try {
+          await deleteSupplementalEventFromGoogleCalendar(suppEvent.id, sync.user_id);
+
+          // Remove the sync record
+          await prisma.userGoogleEventSync.delete({
+            where: { id: sync.id },
+          });
+
+          console.log(`Deleted supplemental event ${suppEvent.id} (${suppEvent.type}) from user ${sync.user_id}`);
+        } catch (error) {
+          console.error(`Failed to delete supplemental event ${suppEvent.id} from user ${sync.user_id}:`, error);
+          // Don't throw - partial failures shouldn't break the whole deletion
+        }
+      })
+    );
+  }
+}
+
+/**
  * Sync supplemental events to non-assigned members who have keep_supplemental_events enabled
  * Optimized to batch-fetch all user data to eliminate N+1 queries
  * @param supplementalEventId - The supplemental event ID

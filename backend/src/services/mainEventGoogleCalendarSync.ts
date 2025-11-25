@@ -123,20 +123,58 @@ export async function syncMainEventToGoogleCalendar(
       });
     }
 
-    if (existingSync && existingSync.google_event_id) {
-      // Update existing event for this user
-      try {
-        const response = await calendar.events.update({
-          calendarId,
-          eventId: existingSync.google_event_id,
-          requestBody: eventBody,
-        });
+    console.log(`[syncMainEventToGoogleCalendar] Event ${eventId}, User ${userId}`);
+    console.log(`  Existing sync record:`, existingSync ? {
+      id: existingSync.id,
+      google_event_id: existingSync.google_event_id,
+      sync_type: existingSync.sync_type,
+    } : 'NONE');
 
-        console.log(`Updated main event ${eventId} in user ${userId}'s Google Calendar: ${existingSync.google_event_id}`);
-        return existingSync.google_event_id;
+    if (existingSync && existingSync.google_event_id) {
+      // CRITICAL: Verify the Google Calendar event still exists before trying to update
+      console.log(`  Attempting to UPDATE existing Google Calendar event: ${existingSync.google_event_id}`);
+
+      try {
+        // First, try to GET the event to see if it exists
+        try {
+          await calendar.events.get({
+            calendarId,
+            eventId: existingSync.google_event_id,
+          });
+          console.log(`  ✅ Google Calendar event EXISTS, proceeding with UPDATE`);
+        } catch (getError: any) {
+          if (getError?.response?.status === 404) {
+            console.warn(`  ⚠️  STALE SYNC RECORD: Google Calendar event ${existingSync.google_event_id} does NOT exist (404)`);
+            console.warn(`  This happens when user was removed and re-added`);
+            console.warn(`  Deleting stale sync record and will CREATE new event instead`);
+
+            // Delete the stale sync record
+            await prisma.userGoogleEventSync.delete({
+              where: { id: existingSync.id },
+            });
+
+            // Set to null so we fall through to CREATE logic below
+            existingSync = null;
+          } else {
+            throw getError;
+          }
+        }
+
+        // If we still have existingSync, the event exists and we can update it
+        if (existingSync) {
+          const response = await calendar.events.update({
+            calendarId,
+            eventId: existingSync.google_event_id,
+            requestBody: eventBody,
+          });
+
+          console.log(`  ✅ Updated main event ${eventId} in user ${userId}'s Google Calendar: ${existingSync.google_event_id}`);
+          return existingSync.google_event_id;
+        }
       } catch (error: any) {
         // Handle Google API errors
         const statusCode = error?.response?.status || 500;
+        console.error(`  ❌ Failed to update Google Calendar event:`, error.message);
         throw new ExternalAPIError(
           `Failed to update event in Google Calendar: ${getErrorMessage(error)}`,
           'Google Calendar',
@@ -144,12 +182,17 @@ export async function syncMainEventToGoogleCalendar(
           {
             eventId,
             userId,
-            googleEventId: existingSync.google_event_id,
+            googleEventId: existingSync?.google_event_id,
             operation: 'update',
           }
         );
       }
-    } else {
+    }
+
+    // CREATE new event (either no sync record existed, or we deleted a stale one above)
+    if (!existingSync) {
+      console.log(`  Creating NEW Google Calendar event`);
+
       // Create new event for this user
       try {
         const response = await calendar.events.insert({
@@ -168,7 +211,7 @@ export async function syncMainEventToGoogleCalendar(
           );
         }
 
-        console.log(`Synced main event ${eventId} to user ${userId}'s Google Calendar: ${googleEventId}`);
+        console.log(`  ✅ CREATED main event ${eventId} in user ${userId}'s Google Calendar: ${googleEventId}`);
         return googleEventId;
       } catch (error: any) {
         // Re-throw our custom errors
@@ -190,6 +233,9 @@ export async function syncMainEventToGoogleCalendar(
         );
       }
     }
+
+    // Should never reach here, but TypeScript needs this
+    return null;
   } catch (error) {
     // Log the error with context
     console.error('Failed to sync main event to Google Calendar:', formatErrorForLogging(error as Error));
@@ -209,9 +255,12 @@ export async function deleteMainEventFromGoogleCalendar(
   eventId: string,
   userId: string
 ): Promise<void> {
+  console.log(`    [deleteMainEventFromGoogleCalendar] Starting deletion for event ${eventId}, user ${userId}`);
+
   // Check if user has Google Calendar sync enabled
   const syncEnabled = await isGoogleCalendarSyncEnabled(userId);
   if (!syncEnabled) {
+    console.log(`    [deleteMainEventFromGoogleCalendar] Google Calendar sync not enabled for user ${userId}, skipping`);
     return;
   }
 
@@ -228,30 +277,41 @@ export async function deleteMainEventFromGoogleCalendar(
 
     if (!existingSync || !existingSync.google_event_id) {
       // This user doesn't have this event synced, nothing to delete
-      console.log(`User ${userId} doesn't have main event ${eventId} synced, skipping deletion`);
+      console.log(`    [deleteMainEventFromGoogleCalendar] ⚠️  No sync record found for event ${eventId}, user ${userId}`);
+      console.log(`    [deleteMainEventFromGoogleCalendar] This means the event was never synced or already deleted`);
       return;
     }
+
+    console.log(`    [deleteMainEventFromGoogleCalendar] Found sync record with Google Event ID: ${existingSync.google_event_id}`);
 
     // Get user's Google Calendar ID
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      select: { google_calendar_id: true },
+      select: {
+        google_calendar_id: true,
+        email: true,
+      },
     });
 
     const calendarId = user?.google_calendar_id || 'primary';
+    console.log(`    [deleteMainEventFromGoogleCalendar] Deleting from calendar: ${calendarId} (user: ${user?.email})`);
 
     // Get Google Calendar client
     const calendar = await getGoogleCalendarClient(userId);
 
     // Delete event from Google Calendar
+    console.log(`    [deleteMainEventFromGoogleCalendar] Calling Google Calendar API to delete event...`);
     await calendar.events.delete({
       calendarId,
       eventId: existingSync.google_event_id,
     });
 
-    console.log(`Deleted main event ${eventId} from user ${userId}'s Google Calendar`);
-  } catch (error) {
-    console.error(`Failed to delete main event ${eventId} from user ${userId}'s Google Calendar:`, error);
-    // Don't throw - this is a cleanup operation
+    console.log(`    [deleteMainEventFromGoogleCalendar] ✅ Successfully deleted event from Google Calendar API`);
+  } catch (error: any) {
+    console.error(`    [deleteMainEventFromGoogleCalendar] ❌ ERROR during deletion:`);
+    console.error(`    Error message: ${error.message}`);
+    console.error(`    Error code: ${error.code}`);
+    console.error(`    Full error:`, error);
+    // Don't throw - this is a cleanup operation, but we've logged the error
   }
 }

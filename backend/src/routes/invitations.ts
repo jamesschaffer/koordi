@@ -89,6 +89,25 @@ router.post(
 
     const invitation = await sendInvitation(calendarId, email, userId);
 
+    // CRITICAL: If existing user was added directly (status='accepted'), sync events to their Google Calendar
+    if (invitation.status === 'accepted' && invitation.user_id) {
+      console.log(`[sendInvitation] Existing user added directly, syncing events to their Google Calendar`);
+
+      // Sync all calendar events to the new member (same as accept endpoint)
+      try {
+        const syncPromise = icsSyncService.syncCalendarEventsToMembers(calendarId);
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Event sync timeout after 90 seconds')), 90000)
+        );
+
+        await Promise.race([syncPromise, timeoutPromise]);
+        console.log(`[sendInvitation] Successfully synced all events to ${invitation.invited_email}`);
+      } catch (syncError) {
+        console.error(`[sendInvitation] Failed to sync events to ${invitation.invited_email}:`, syncError);
+        // Don't fail the invitation if sync fails - events can be synced later
+      }
+    }
+
     // Broadcast WebSocket event
     const io = req.app.get('io');
     if (io) {

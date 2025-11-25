@@ -1,4 +1,4 @@
-import { deleteMainEventFromAllMembers } from './multiUserSyncService';
+import { deleteMainEventFromAllMembers, deleteSupplementalEventsFromAllMembers } from './multiUserSyncService';
 import { prisma } from '../lib/prisma';
 
 export interface CreateEventCalendarData {
@@ -214,17 +214,27 @@ export const deleteEventCalendar = async (calendarId: string, userId: string) =>
 
   console.log(`[deleteEventCalendar] Found ${events.length} events to clean up`);
 
-  // Delete all events from all members' Google Calendars using the tracking system
+  // Delete all main events from all members' Google Calendars using the tracking system
   for (const event of events) {
     try {
       await deleteMainEventFromAllMembers(event.id);
-      console.log(`[deleteEventCalendar] Deleted event "${event.title}" from all users' Google Calendars`);
+      console.log(`[deleteEventCalendar] Deleted main event "${event.title}" from all users' Google Calendars`);
     } catch (error: any) {
-      console.error(`[deleteEventCalendar] Failed to delete event "${event.title}":`, error.message);
+      console.error(`[deleteEventCalendar] Failed to delete main event "${event.title}":`, error.message);
     }
   }
 
-  // Delete the calendar (cascade will delete events, memberships, etc.)
+  // Delete all supplemental events from all members' Google Calendars
+  for (const event of events) {
+    try {
+      await deleteSupplementalEventsFromAllMembers(event.id);
+      console.log(`[deleteEventCalendar] Deleted supplemental events for "${event.title}" from all users' Google Calendars`);
+    } catch (error: any) {
+      console.error(`[deleteEventCalendar] Failed to delete supplemental events for "${event.title}":`, error.message);
+    }
+  }
+
+  // Delete the calendar (cascade will delete events, memberships, supplemental events, etc.)
   const result = await prisma.eventCalendar.delete({
     where: { id: calendarId },
   });

@@ -4,6 +4,7 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "nodemon src/index.ts",
+    "dev:check": "bash ../scripts/validate-ports.sh && npm run dev",
     "build": "tsc",
     "start": "node dist/index.js",
     "test": "vitest",
@@ -13,7 +14,8 @@
     "prisma:studio": "prisma studio",
     "prisma:seed": "ts-node prisma/seed.ts",
     "lint": "eslint src --ext .ts",
-    "format": "prettier --write \"src/**/*.ts\""
+    "format": "prettier --write \"src/**/*.ts\"",
+    "validate-ports": "bash ../scripts/validate-ports.sh"
   },
   "keywords": [],
   "author": "",

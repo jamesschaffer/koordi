@@ -181,7 +181,7 @@ router.delete('/:id', async (req: Request, res: Response) => {
       },
     });
 
-    if (acceptedMemberCount > 1) {
+    if (acceptedMemberCount >= 1) {
       return res.status(400).json({
         error: 'Cannot delete calendar with multiple members',
         details: `This calendar has ${acceptedMemberCount} members. Remove all other members before deleting.`,

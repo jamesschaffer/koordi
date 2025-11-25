@@ -27,14 +27,16 @@ export function MultiMemberDeleteError({
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>Cannot Delete Calendar with Multiple Members</AlertDialogTitle>
-          <AlertDialogDescription className="space-y-2">
-            <p>
-              This calendar has <span className="font-semibold">{memberCount} members</span>. You must remove all other members
-              before deleting the calendar.
-            </p>
-            <p className="text-sm">
-              This ensures their Google Calendars are properly cleaned up and no events are orphaned.
-            </p>
+          <AlertDialogDescription asChild>
+            <div className="space-y-2">
+              <p>
+                This calendar has <span className="font-semibold">{memberCount} members</span>. You must remove all other members
+                before deleting the calendar.
+              </p>
+              <p className="text-sm">
+                This ensures their Google Calendars are properly cleaned up and no events are orphaned.
+              </p>
+            </div>
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
