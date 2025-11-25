@@ -63,7 +63,6 @@ jobs:
             --platform=managed \
             --allow-unauthenticated \
             --set-env-vars=NODE_ENV=production,FRONTEND_URL=https://app.koordie.com,GOOGLE_REDIRECT_URI=https://api.koordie.com/api/auth/google/callback \
-            --traffic=latest=100 \
             --quiet
 
       - name: Health Check
