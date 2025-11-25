@@ -177,7 +177,7 @@ The following documents provide complete, implementation-ready specifications fo
    Details the complete lifecycle of child management including adding children after initial onboarding, viewing child details with associated Event Calendars, editing child information (name, photo, date of birth), and deletion constraints (prevented when Event Calendars exist). Covers child filter behavior across the app and emphasizes that all parent members have equal management rights regardless of Event Calendar ownership.
 
 5. **[EVENT_CAL_MGMT.md](./EVENT_CAL_MGMT.md)** - Managing Event Calendars throughout their lifecycle
-   Covers post-onboarding Event Calendar management including adding additional calendars, viewing calendar details with sync status and event counts, manual refresh for immediate synchronization, automatic periodic sync (every 4 hours), sync failure handling with error indicators, and calendar deletion with high-friction confirmation. Details ICS URL immutability and owner-only deletion permissions.
+   Covers post-onboarding Event Calendar management including adding additional calendars, viewing calendar details with sync status and event counts, manual refresh for immediate synchronization, automatic periodic sync (every 15 minutes), sync failure handling with error indicators, and calendar deletion with high-friction confirmation. Details ICS URL immutability and owner-only deletion permissions.
 
 6. **[PARENT_MEMBER_MGMT.md](./PARENT_MEMBER_MGMT.md)** - Managing parent member access to Event Calendars
    Specifies parent member lifecycle including inviting new members to Event Calendars, accepting/declining invitations, viewing member lists with ownership indicators, removing members (deletes events from their Google Calendar), member leaving calendars, resending/canceling invitations, and partial membership support (member of some calendars but not others for same child). Covers equal permissions for all members except calendar deletion.
@@ -191,7 +191,7 @@ The following documents provide complete, implementation-ready specifications fo
    Defines conflict detection logic based on total time commitment (including drive times), conflict warning modals displayed during assignment, conflict display in event feeds with color-coded indicators, resolution suggestions, and handling of multi-child conflicts. Emphasizes warning users without preventing assignment, allowing for backup plans and carpools.
 
 9. **[EVENT_CHANGE_FLOW.md](./EVENT_CHANGE_FLOW.md)** - Automatic synchronization from source ICS calendars
-   Describes the automatic sync process that runs every 4 hours to detect changes in source ICS feeds. Covers how new events are automatically added, existing events are updated when time/location/description changes occur, and deleted events are removed from the system. Details the assignment preservation rules ensuring parent assignments survive event updates, real-time WebSocket notifications to all family members, and sync status visibility showing last successful sync time.
+   Describes the automatic sync process that runs every 15 minutes to detect changes in source ICS feeds. Covers how new events are automatically added, existing events are updated when time/location/description changes occur, and deleted events are removed from the system. Details the assignment preservation rules ensuring parent assignments survive event updates, real-time WebSocket notifications to all family members, and sync status visibility showing last successful sync time.
 
 ---
 
@@ -274,7 +274,7 @@ Represents a single ICS feed source associated with one child (e.g., "Xander's S
 **Business Rules:**
 - Owner can delete the calendar
 - All members can view and assign events
-- Syncs automatically every 4 hours
+- Syncs automatically every 15 minutes
 - Cannot have duplicate ICS URLs for the same child
 
 ---
@@ -545,7 +545,7 @@ Supplemental Event (Drive Time)
 #### Background Jobs & Scheduling
 - **Bull Queue** (Redis-backed job queue)
 - **Job Types:**
-  - ICS feed synchronization (every 4 hours per calendar)
+  - ICS feed synchronization (every 15 minutes per calendar)
   - Google Calendar sync (on-demand and scheduled)
   - Traffic recalculation for upcoming events
   - Push notification delivery
@@ -858,7 +858,7 @@ Supplemental Event (Drive Time)
 
 **Job Types:**
 
-**a) ICS Sync Job (Every 4 hours per Event Calendar)**
+**a) ICS Sync Job (Every 15 minutes per Event Calendar)**
 - Fetch ICS feed from URL
 - Parse events using ical.js
 - Compare with existing events (by ics_event_uid)
@@ -900,7 +900,7 @@ The system implements several core interaction patterns between components. For 
 - WebSocket connections authenticated via JWT, users join rooms per Event Calendar membership
 
 **Event Lifecycle:**
-- ICS sync (every 4 hours) → Parse/geocode → Create/update database events → Sync to all members' Google Calendars
+- ICS sync (every 15 minutes) → Parse/geocode → Create/update database events → Sync to all members' Google Calendars
 - Assignment preserves through updates; supplemental events (drive times) created only for assigned parent
 - Real-time propagation via WebSocket broadcasts to Event Calendar rooms
 

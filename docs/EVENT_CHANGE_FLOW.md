@@ -8,7 +8,7 @@
 This document defines how the system handles changes to events in source ICS calendars: new events added, existing events updated (time, location, description), and events deleted. All changes are detected automatically through periodic polling and applied without user intervention.
 
 **Key Principles:**
-- Changes detected automatically via polling (every 4 hours)
+- Changes detected automatically via polling (every 15 minutes)
 - Users see changes reflected passively - no special in-app notifications
 - Google Calendar handles all user notifications for event changes
 - Assignments preserved through updates when possible
@@ -21,7 +21,7 @@ This document defines how the system handles changes to events in source ICS cal
 
 ### Background Polling
 
-**Frequency:** Every 4 hours (configurable)
+**Frequency:** Every 15 minutes (configurable)
 
 **Process:**
 1. System fetches all active Event Calendar ICS feeds
@@ -694,7 +694,7 @@ The following are architectural and technical implementation questions that need
 ## SUCCESS CRITERIA
 
 **Automatic Sync:**
-1. ✅ System polls ICS feeds every 4 hours
+1. ✅ System polls ICS feeds every 15 minutes
 2. ✅ New events created automatically (unassigned)
 3. ✅ Event updates applied automatically
 4. ✅ Deleted events removed from all calendars

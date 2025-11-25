@@ -63,7 +63,7 @@ Save as `.vscode/extensions.json` in project root.
 ## PROJECT STRUCTURE
 
 ```
-/CalendarApp
+/koordi
 ├── backend/                    # Node.js + Express backend
 │   ├── src/
 │   │   ├── routes/            # API route handlers
@@ -121,7 +121,7 @@ Save as `.vscode/extensions.json` in project root.
 
 ```bash
 # Navigate to project root
-cd CalendarApp
+cd koordi
 
 # Create backend directory
 mkdir backend
@@ -273,7 +273,7 @@ Create `backend/nodemon.json`:
 
 ```bash
 # From project root
-cd CalendarApp
+cd koordi
 
 # Create Vite project
 npm create vite@latest frontend -- --template react-ts

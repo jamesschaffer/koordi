@@ -1034,7 +1034,7 @@ Notification/Alert:
 
 **Sync Frequency:**
 - Immediate: When event created/updated/assigned in app
-- Polling: Check ICS feed every 4 hours for new/changed events
+- Polling: Check ICS feed every 15 minutes for new/changed events
 - Webhook: Google Calendar webhook for external changes (Phase 2)
 
 **Sync Operations:**

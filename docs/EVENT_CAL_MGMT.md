@@ -226,7 +226,7 @@ User taps "Refresh Now" on Calendar Detail screen
 
 ### Background Process
 
-**Frequency:** Every 4 hours (configurable)
+**Frequency:** Every 15 minutes (configurable)
 
 **Process:**
 1. System fetches all active Event Calendar ICS feeds
@@ -558,7 +558,7 @@ All events have been removed from your calendar.
 ## TECHNICAL REQUIREMENTS
 
 ### ICS Polling
-- Scheduled job every 4 hours
+- Scheduled job every 15 minutes
 - Fetch all active Event Calendar feeds
 - Compare events, apply changes
 - Update Google Calendars
@@ -607,7 +607,7 @@ All events have been removed from your calendar.
 15. ✅ Last synced timestamp updated
 
 **Automatic Sync:**
-16. ✅ Polls every 4 hours
+16. ✅ Polls every 15 minutes
 17. ✅ All calendars synced successfully
 18. ✅ Events updated automatically
 19. ✅ No user intervention required

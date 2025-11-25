@@ -13,7 +13,7 @@ This document provides a comprehensive breakdown of core features in Koordi. Eac
 
 **Total Features:** 53 features across 6 major flows
 
-**Note:** Additional specialized flows (Event Calendar Management, Parent Member Management, Conflict Resolution) are documented in their respective flow specification files referenced in [PROJECT_CONTEXT.MD](./PROJECT_CONTEXT.MD).
+**Note:** Additional specialized flows (Event Calendar Management, Parent Member Management, Conflict Resolution) are documented in their respective flow specification files. See [EVENT_CAL_MGMT.md](./EVENT_CAL_MGMT.md), [PARENT_MEMBER_MGMT.md](./PARENT_MEMBER_MGMT.md), and [CONFLICT_RESOLUTION.md](./CONFLICT_RESOLUTION.md).
 
 ---
 
@@ -1529,7 +1529,7 @@ This document provides a comprehensive breakdown of core features in Koordi. Eac
 ### Feature 6.1: Automatic ICS Sync (Scheduled Background Job)
 
 **User Action:**
-- (Automatic - scheduled job runs every 4 hours)
+- (Automatic - scheduled job runs every 15 minutes)
 
 **Business Logic:**
 1. Fetch all Event Calendars with sync_enabled = true
