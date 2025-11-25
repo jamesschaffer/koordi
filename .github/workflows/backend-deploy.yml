@@ -45,12 +45,15 @@ jobs:
           docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/backend:${{ github.sha }}
           docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/backend:latest
 
-      - name: Run database migrations
-        run: |
-          cd backend
-          # Install dependencies and run migrations
-          npm ci
-          DATABASE_URL="${{ secrets.DATABASE_URL }}" npx prisma migrate deploy
+      # TODO: Re-enable automated migrations with Cloud SQL Proxy
+      # - name: Run database migrations
+      #   run: |
+      #     cd backend
+      #     # Install dependencies and run migrations
+      #     npm ci
+      #     DATABASE_URL="${{ secrets.DATABASE_URL }}" npx prisma migrate deploy
+      #
+      # For now, run migrations manually from Cloud Run or local with production DB access
 
       - name: Deploy to Cloud Run
         run: |
