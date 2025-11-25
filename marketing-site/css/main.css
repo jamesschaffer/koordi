@@ -161,7 +161,7 @@ body {
     text-align: center;
     font-size: 40px;
     font-weight: 700;
-    margin-bottom: 64px;
+    margin-bottom: 0;
     color: var(--text-primary);
 }
 
@@ -186,6 +186,10 @@ body {
     align-items: center;
     justify-content: center;
     color: var(--primary-color);
+}
+
+.feature-icon.google-icon {
+    background: var(--white);
 }
 
 .feature-title {
