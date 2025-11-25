@@ -55,7 +55,6 @@ jobs:
             --region=${{ env.REGION }} \
             --platform=managed \
             --allow-unauthenticated \
-            --traffic=latest=100 \
             --quiet
 
       - name: Health Check
