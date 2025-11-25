@@ -262,7 +262,7 @@ DATABASE_URL=postgresql://koordi_user:dev_password_123@localhost:5432/koordi_dev
 NODE_ENV=development
 FRONTEND_URL=http://localhost:5173
 SMTP_USER=james@jamesschaffer.com
-SMTP_PASS=ferwdmnzuscidbxo (App Password)
+SMTP_PASS=<app_password_redacted>
 ```
 
 **Production (Cloud Run):**
@@ -270,8 +270,8 @@ SMTP_PASS=ferwdmnzuscidbxo (App Password)
 DATABASE_URL=<secret> (different host, credentials)
 NODE_ENV=production
 FRONTEND_URL=https://app.koordie.com
-SMTP_USER=james@jamesschaffer.com (same)
-SMTP_PASS=ferwdmnzuscidbxo (same)
+SMTP_USER=james@jamesschaffer.com
+SMTP_PASS=<secret_from_secret_manager>
 ```
 
 **Parity Issues:**
