@@ -33,80 +33,76 @@ Authorization: Bearer <jwt_token>
 ### JWT Structure
 ```json
 {
-  "sub": "user-uuid",
+  "userId": "user-uuid",
   "email": "user@example.com",
   "iat": 1699564800,
-  "exp": 1699651200
+  "exp": 1700169600
 }
 ```
 
-**Token Expiration:** 24 hours
-**Refresh Strategy:** Automatic refresh when < 1 hour remaining
+**Token Expiration:** 7 days (hardcoded in `src/utils/jwt.ts`)
+**Refresh Strategy:** None - user must re-authenticate via Google OAuth when token expires
 
 ---
 
 ## COMMON PATTERNS
 
 ### Pagination
-List endpoints support pagination:
 
-**Query Parameters:**
-- `page` (default: 1)
-- `limit` (default: 50, max: 100)
+**Status:** NOT IMPLEMENTED
 
-**Response:**
-```json
-{
-  "data": [...],
-  "pagination": {
-    "page": 1,
-    "limit": 50,
-    "total": 150,
-    "totalPages": 3
-  }
-}
-```
+Pagination is not currently implemented. All list endpoints return complete result sets.
 
 ### Filtering
-**Date Ranges:**
-- `start_date` (ISO 8601)
-- `end_date` (ISO 8601)
 
-**Child Filter:**
-- `child_id` (UUID)
+**Events Endpoint (`GET /api/events`) supports:**
+- `calendar_id` - Filter by calendar UUID
+- `start_date` - ISO 8601 date (events starting after)
+- `end_date` - ISO 8601 date (events starting before)
+- `unassigned` - "true" to show only unassigned events
+- `assigned_to_me` - "true" to show events assigned to current user
 
-**Assignment Filter:**
-- `assigned_to` (UUID or "unassigned" or "me")
+**Note:** `child_id` filter is NOT implemented
 
 ---
 
 ## ERROR RESPONSES
 
-### Standard Error Format
+### Actual Error Format
+
+Most endpoints use a simple error format:
 ```json
 {
-  "error": {
-    "code": "ERROR_CODE",
-    "message": "Human-readable error message",
-    "details": {
-      "field": "Additional context"
-    }
-  }
+  "error": "Human-readable error message"
 }
 ```
 
-### HTTP Status Codes
+Some endpoints (e.g., event assignment conflicts) return structured errors:
+```json
+{
+  "error": "Event was modified by another user",
+  "code": "CONCURRENT_MODIFICATION",
+  "details": {
+    "expected_version": 5,
+    "actual_version": 6,
+    "current_state": { ... }
+  },
+  "message": "The event has been updated since you last viewed it."
+}
+```
+
+### HTTP Status Codes Used
 - `200` OK - Successful request
 - `201` Created - Resource created successfully
-- `400` Bad Request - Invalid input
-- `401` Unauthorized - Missing or invalid authentication
-- `403` Forbidden - Authenticated but not authorized
-- `404` Not Found - Resource doesn't exist
-- `409` Conflict - Resource conflict (duplicate, etc.)
-- `422` Unprocessable Entity - Validation errors
-- `429` Too Many Requests - Rate limit exceeded
+- `204` No Content - Successful delete
+- `400` Bad Request - Invalid input or business rule violation
+- `401` Unauthorized - Missing authentication token
+- `403` Forbidden - Invalid or expired token
+- `404` Not Found - Resource doesn't exist or access denied
+- `409` Conflict - Concurrent modification (optimistic locking)
 - `500` Internal Server Error - Server error
-- `503` Service Unavailable - External service failure
+
+**Not Used:** `422`, `429`, `503` (rate limiting minimal, no structured validation errors)
 
 ---
 
@@ -145,7 +141,6 @@ OAuth callback endpoint.
 
 **Query Parameters:**
 - `code` (required) - OAuth authorization code
-- `state` (required) - CSRF token from initiate
 
 **Response:** `302 Redirect`
 
@@ -507,8 +502,8 @@ Returns array of users with their calendar associations
 Send invitation to join an Event Calendar.
 
 **Authentication:** Required
-**Authorization:** Owner only
-**Rate Limit:** 10 invitations per calendar per hour
+**Authorization:** Any calendar member (not just owner)
+**Rate Limit:** 10 invitations per 15 minutes per IP (via `invitationRateLimiter`)
 
 **Request Body:**
 ```json
@@ -518,9 +513,8 @@ Send invitation to join an Event Calendar.
 ```
 
 **Validation:**
-- Max 10 members per Event Calendar
 - Email must be valid format
-- Cannot invite existing members
+- Cannot invite existing members or self
 
 **Response:** `201 Created`
 Returns membership/invitation object
@@ -533,10 +527,7 @@ Returns membership/invitation object
 
 **Errors:**
 - `400` - Email is required / Invalid email format
-- `400` - This email already has a pending invitation
-- `400` - This email is already a member
-- `400` - Maximum 10 members per calendar
-- `400` - Only the calendar owner can send invitations
+- `400` - Various business rule violations (already member, etc.)
 
 ---
 
