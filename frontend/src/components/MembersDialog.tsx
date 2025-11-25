@@ -48,6 +48,7 @@ export function MembersDialog({ calendarId, calendarName, isOwner, open, onOpenC
   const [inviteEmail, setInviteEmail] = useState('');
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
   const [isRemovingMember, setIsRemovingMember] = useState(false);
+  const [resendingInvitationId, setResendingInvitationId] = useState<string | null>(null);
 
   // Fetch members
   const { data: membersData, isLoading } = useQuery({
@@ -110,14 +111,19 @@ export function MembersDialog({ calendarId, calendarName, isOwner, open, onOpenC
   // Resend invitation mutation
   const resendInvitationMutation = useMutation({
     mutationFn: (invitationId: string) => resendInvitation(invitationId, token),
+    onMutate: (invitationId: string) => {
+      setResendingInvitationId(invitationId);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['calendar-members', calendarId] });
       toast.success('Invitation resent!');
+      setResendingInvitationId(null);
     },
     onError: (error: any) => {
       toast.error('Failed to resend invitation', {
         description: error.message || 'Please try again',
       });
+      setResendingInvitationId(null);
     },
   });
 
@@ -341,10 +347,10 @@ export function MembersDialog({ calendarId, calendarName, isOwner, open, onOpenC
                             size="sm"
                             className="shrink-0"
                             onClick={() => resendInvitationMutation.mutate(member.id)}
-                            disabled={resendInvitationMutation.isPending}
+                            disabled={resendingInvitationId === member.id}
                             title="Resend invitation email"
                           >
-                            <RefreshCw className={`h-3 w-3 mr-1 ${resendInvitationMutation.isPending ? 'animate-spin' : ''}`} />
+                            <RefreshCw className={`h-3 w-3 mr-1 ${resendingInvitationId === member.id ? 'animate-spin' : ''}`} />
                             Resend
                           </Button>
                           <Button

@@ -63,6 +63,7 @@ jobs:
             --platform=managed \
             --allow-unauthenticated \
             --set-env-vars=NODE_ENV=production,FRONTEND_URL=https://app.koordie.com,GOOGLE_REDIRECT_URI=https://api.koordie.com/api/auth/google/callback \
+            --update-secrets=SMTP_HOST=SMTP_HOST:latest,SMTP_PORT=SMTP_PORT:latest,SMTP_SECURE=SMTP_SECURE:latest,SMTP_USER=SMTP_USER:latest,SMTP_PASS=SMTP_PASS:latest,EMAIL_FROM=EMAIL_FROM:latest \
             --quiet
 
       - name: Health Check
