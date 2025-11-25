@@ -32,12 +32,55 @@ app.use(
 app.use(express.json());
 
 // API routes
-app.get('/api/health', (req, res) => {
-  res.json({
-    status: 'ok',
+app.get('/api/health', async (req, res) => {
+  const checks: Record<string, { status: string; message?: string }> = {};
+  let allHealthy = true;
+
+  // Check critical environment variables
+  const requiredEnvVars = [
+    'DATABASE_URL',
+    'JWT_SECRET',
+    'ENCRYPTION_KEY',
+    'REDIS_URL',
+  ];
+
+  const emailEnvVars = ['SMTP_HOST', 'SMTP_USER', 'SMTP_PASS', 'EMAIL_FROM'];
+
+  requiredEnvVars.forEach((varName) => {
+    if (process.env[varName]) {
+      checks[varName.toLowerCase()] = { status: 'ok' };
+    } else {
+      checks[varName.toLowerCase()] = { status: 'error', message: 'Not configured' };
+      allHealthy = false;
+    }
+  });
+
+  // Check email configuration (warning, not critical)
+  const emailConfigured = emailEnvVars.every((varName) => process.env[varName]);
+  if (emailConfigured) {
+    checks.email = { status: 'ok', message: 'SMTP configured' };
+  } else {
+    checks.email = { status: 'warning', message: 'SMTP not fully configured - emails will be logged to console' };
+  }
+
+  // Quick database connectivity check
+  try {
+    const { prisma } = await import('./lib/prisma');
+    await prisma.$queryRaw`SELECT 1`;
+    checks.database = { status: 'ok', message: 'Connected' };
+  } catch (error: any) {
+    checks.database = { status: 'error', message: error.message };
+    allHealthy = false;
+  }
+
+  const statusCode = allHealthy ? 200 : 503;
+
+  res.status(statusCode).json({
+    status: allHealthy ? 'healthy' : 'degraded',
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
     environment: process.env.NODE_ENV || 'development',
+    checks,
   });
 });
 

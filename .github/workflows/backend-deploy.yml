@@ -66,15 +66,34 @@ jobs:
             --update-secrets=SMTP_HOST=SMTP_HOST:latest,SMTP_PORT=SMTP_PORT:latest,SMTP_SECURE=SMTP_SECURE:latest,SMTP_USER=SMTP_USER:latest,SMTP_PASS=SMTP_PASS:latest,EMAIL_FROM=EMAIL_FROM:latest \
             --quiet
 
+      - name: Validate Configuration
+        run: |
+          echo "🔍 Validating production configuration..."
+          chmod +x scripts/validate-prod-config.sh
+          ./scripts/validate-prod-config.sh
+
       - name: Health Check
         run: |
           echo "Waiting for service to be ready..."
-          sleep 10
+          sleep 15
           HEALTH_URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} --region=${{ env.REGION }} --format='value(status.url)')/api/health
-          if curl -f -s "$HEALTH_URL" > /dev/null; then
-            echo "✅ Health check passed"
+
+          echo "Checking health endpoint..."
+          HEALTH_RESPONSE=$(curl -s -w "\n%{http_code}" "$HEALTH_URL")
+          HTTP_CODE=$(echo "$HEALTH_RESPONSE" | tail -n1)
+          HEALTH_BODY=$(echo "$HEALTH_RESPONSE" | head -n-1)
+
+          echo "Response:"
+          echo "$HEALTH_BODY" | jq '.'
+
+          if [ "$HTTP_CODE" -eq 200 ]; then
+            echo "✅ Health check passed - all systems healthy"
+          elif [ "$HTTP_CODE" -eq 503 ]; then
+            echo "⚠️  Service degraded but running"
+            echo "$HEALTH_BODY" | jq '.checks'
+            echo "Deployment will continue but issues detected above"
           else
-            echo "❌ Health check failed"
+            echo "❌ Health check failed with HTTP $HTTP_CODE"
             exit 1
           fi
 
