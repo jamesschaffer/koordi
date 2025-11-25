@@ -2,7 +2,7 @@
 ## Koordi
 
 **Purpose:** Complete specification for parsing ICS (iCalendar) feeds
-**Library:** ical.js (Mozilla Calendar Data API)
+**Libraries:** `ical.js` (validation) and `node-ical` (sync parsing)
 **Use Case:** Import events from external calendar feeds (TeamSnap, sports leagues, school calendars)
 
 ---
@@ -107,11 +107,18 @@ DTSTART;VALUE=DATE:20240320
 ### Installation
 
 ```bash
-npm install ical.js
+npm install ical.js node-ical axios
 npm install -D @types/ical.js
 ```
 
-### Basic Usage
+### Two Services
+
+The implementation uses two separate services:
+
+1. **`icsService.ts`** - Uses `ical.js` for validation and basic parsing
+2. **`icsSyncService.ts`** - Uses `node-ical` for the actual sync process
+
+### Basic Usage with ical.js (Validation)
 
 ```typescript
 import ICAL from 'ical.js';
@@ -121,6 +128,9 @@ const jcalData = ICAL.parse(icsString);
 
 // Create component
 const comp = new ICAL.Component(jcalData);
+
+// Get calendar name
+const calendarName = comp.getFirstPropertyValue('x-wr-calname');
 
 // Get all events
 const vevents = comp.getAllSubcomponents('vevent');
@@ -132,142 +142,265 @@ for (const vevent of vevents) {
 }
 ```
 
+### Basic Usage with node-ical (Sync)
+
+```typescript
+import ical from 'node-ical';
+
+// Parse ICS data
+const events = await ical.async.parseICS(icsData);
+
+for (const event of Object.values(events)) {
+  if (event.type !== 'VEVENT') continue;
+  console.log(event.summary, event.start);
+}
+```
+
 ---
 
 ## PARSING IMPLEMENTATION
 
-### Complete Parser Service
+### Validation Service (icsService.ts)
 
 ```typescript
-// src/services/ics-parser-service.ts
+// src/services/icsService.ts
 import ICAL from 'ical.js';
-import axios from 'axios';
-import logger from '../utils/logger';
+import { prisma } from '../lib/prisma';
 
 interface ParsedEvent {
   ics_uid: string;
   title: string;
-  description: string | null;
-  location: string | null;
+  description?: string;
+  location?: string;
+  start_time: Date;
+  end_time: Date;
+  is_all_day: boolean;
+}
+
+/**
+ * Fetch ICS feed from URL using native fetch
+ */
+export const fetchICSFeed = async (url: string): Promise<string> => {
+  try {
+    const response = await fetch(url, {
+      headers: { 'User-Agent': 'Koordi/1.0' },
+      signal: AbortSignal.timeout(10000), // 10 second timeout
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    const contentType = response.headers.get('content-type');
+    if (contentType && !contentType.includes('text/calendar') && !contentType.includes('text/plain')) {
+      console.warn(`Unexpected content-type: ${contentType}`);
+    }
+
+    return await response.text();
+  } catch (error: any) {
+    if (error.name === 'AbortError') {
+      throw new Error('Request timeout - ICS feed took too long to respond');
+    }
+    throw new Error(`Failed to fetch ICS feed: ${error.message}`);
+  }
+};
+
+/**
+ * Validate an ICS feed URL and return metadata
+ */
+export const validateICSFeed = async (url: string): Promise<{
+  valid: boolean;
+  calendarName?: string;
+  eventCount?: number;
+  dateRange?: { earliest: Date; latest: Date };
+  error?: string;
+}> => {
+  try {
+    const icsData = await fetchICSFeed(url);
+    const jcalData = ICAL.parse(icsData);
+    const comp = new ICAL.Component(jcalData);
+
+    // Get calendar name
+    const calendarName = String(
+      comp.getFirstPropertyValue('x-wr-calname') ||
+      comp.getFirstPropertyValue('name') ||
+      'Unnamed Calendar'
+    );
+
+    // Get all events
+    const vevents = comp.getAllSubcomponents('vevent');
+
+    if (vevents.length === 0) {
+      return { valid: true, calendarName, eventCount: 0, error: 'Calendar contains no events' };
+    }
+
+    // Find date range
+    let earliest: Date | null = null;
+    let latest: Date | null = null;
+
+    vevents.forEach((vevent) => {
+      const event = new ICAL.Event(vevent);
+      const startDate = event.startDate.toJSDate();
+      const endDate = event.endDate.toJSDate();
+      if (!earliest || startDate < earliest) earliest = startDate;
+      if (!latest || endDate > latest) latest = endDate;
+    });
+
+    return {
+      valid: true,
+      calendarName,
+      eventCount: vevents.length,
+      dateRange: earliest && latest ? { earliest, latest } : undefined,
+    };
+  } catch (error: any) {
+    return { valid: false, error: error.message || 'Failed to parse ICS feed' };
+  }
+};
+
+/**
+ * Parse events from ICS data using ical.js
+ */
+export const parseICSEvents = (icsData: string): ParsedEvent[] => {
+  const jcalData = ICAL.parse(icsData);
+  const comp = new ICAL.Component(jcalData);
+  const vevents = comp.getAllSubcomponents('vevent');
+
+  return vevents.map((vevent) => {
+    const event = new ICAL.Event(vevent);
+    return {
+      ics_uid: event.uid,
+      title: event.summary || 'Untitled Event',
+      description: event.description ? String(event.description) : undefined,
+      location: event.location ? String(event.location) : undefined,
+      start_time: event.startDate.toJSDate(),
+      end_time: event.endDate.toJSDate(),
+      is_all_day: event.startDate.isDate,
+    };
+  });
+};
+```
+
+### Sync Service (icsSyncService.ts)
+
+```typescript
+// src/services/icsSyncService.ts
+import axios from 'axios';
+import ical from 'node-ical';
+import { syncMainEventToAllMembers } from './multiUserSyncService';
+import { prisma } from '../lib/prisma';
+
+interface ParsedEvent {
+  ics_uid: string;
+  title: string;
+  description?: string;
+  location?: string;
   start_time: Date;
   end_time: Date;
   is_all_day: boolean;
   last_modified: Date;
 }
 
-export async function fetchAndParseIcsFeed(icsUrl: string): Promise<ParsedEvent[]> {
-  logger.info('Fetching ICS feed', { icsUrl });
+/**
+ * Fetch and parse ICS feed from URL using node-ical
+ */
+export const fetchAndParseICS = async (icsUrl: string): Promise<ParsedEvent[]> => {
+  const response = await axios.get(icsUrl, {
+    timeout: 30000,
+    headers: { 'User-Agent': 'Koordi/1.0' },
+  });
 
-  try {
-    // 1. Fetch ICS data
-    const response = await axios.get(icsUrl, {
-      timeout: 30000, // 30 seconds
-      headers: {
-        'User-Agent': 'FamilyScheduleApp/1.0',
-        'Accept': 'text/calendar',
-      },
-      maxContentLength: 10 * 1024 * 1024, // 10MB max
-    });
+  const events = await ical.async.parseICS(response.data);
+  const parsedEvents: ParsedEvent[] = [];
 
-    const icsData = response.data;
+  for (const event of Object.values(events)) {
+    if (event.type !== 'VEVENT') continue;
 
-    // 2. Validate content type
-    const contentType = response.headers['content-type'];
-    if (!contentType?.includes('text/calendar') && !contentType?.includes('text/plain')) {
-      logger.warn('Unexpected content type for ICS feed', { contentType, icsUrl });
-    }
+    // Extract event data
+    const icsUid = event.uid || '';
+    const title = event.summary || 'Untitled Event';
+    const description = event.description || undefined;
+    const location = event.location || undefined;
 
-    // 3. Parse ICS data
-    return parseIcsString(icsData);
-  } catch (error) {
-    if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
-      throw new Error(`Unable to reach calendar feed: ${error.message}`);
-    } else if (error.code === 'ETIMEDOUT') {
-      throw new Error('Calendar feed request timed out');
+    // Handle start/end times
+    let startTime: Date;
+    let endTime: Date;
+    let isAllDay = false;
+
+    if (typeof event.start === 'string') {
+      startTime = new Date(event.start);
+    } else if (event.start instanceof Date) {
+      startTime = event.start;
     } else {
-      throw new Error(`Failed to fetch ICS feed: ${error.message}`);
-    }
-  }
-}
-
-export function parseIcsString(icsData: string): ParsedEvent[] {
-  try {
-    // Parse ICS data
-    const jcalData = ICAL.parse(icsData);
-    const comp = new ICAL.Component(jcalData);
-
-    // Extract calendar timezone (if specified)
-    const calendarTimezone = comp.getFirstPropertyValue('x-wr-timezone') || 'UTC';
-
-    // Get all VEVENT components
-    const vevents = comp.getAllSubcomponents('vevent');
-
-    logger.info('Parsed ICS feed', { eventCount: vevents.length, timezone: calendarTimezone });
-
-    const events: ParsedEvent[] = [];
-
-    for (const vevent of vevents) {
-      try {
-        const event = new ICAL.Event(vevent);
-
-        // Skip events without UID (invalid)
-        if (!event.uid) {
-          logger.warn('Skipping event without UID');
-          continue;
-        }
-
-        // Handle recurring events
-        if (event.isRecurring()) {
-          const expandedEvents = expandRecurringEvent(event, calendarTimezone);
-          events.push(...expandedEvents);
-        } else {
-          events.push(parseEvent(event, calendarTimezone));
-        }
-      } catch (error) {
-        logger.error('Failed to parse individual event', { error: error.message });
-        // Continue processing other events
-      }
+      continue; // Skip events without valid start time
     }
 
-    return events;
-  } catch (error) {
-    logger.error('Failed to parse ICS data', { error: error.message });
-    throw new Error(`Invalid ICS format: ${error.message}`);
+    if (typeof event.end === 'string') {
+      endTime = new Date(event.end);
+    } else if (event.end instanceof Date) {
+      endTime = event.end;
+    } else {
+      endTime = new Date(startTime.getTime() + 60 * 60 * 1000); // Default 1 hour
+    }
+
+    if (event.datetype === 'date') {
+      isAllDay = true;
+    }
+
+    const lastModified = event.lastmodified instanceof Date ? event.lastmodified : new Date();
+
+    parsedEvents.push({
+      ics_uid: icsUid,
+      title,
+      description,
+      location,
+      start_time: startTime,
+      end_time: endTime,
+      is_all_day: isAllDay,
+      last_modified: lastModified,
+    });
   }
-}
 
-function parseEvent(event: ICAL.Event, calendarTimezone: string): ParsedEvent {
-  // Extract basic properties
-  const icsUid = event.uid;
-  const title = event.summary || 'Untitled Event';
-  const description = event.description || null;
-  const location = event.location || null;
+  return parsedEvents;
+};
 
-  // Parse start/end times
-  const startDate = event.startDate;
-  const endDate = event.endDate;
+/**
+ * Sync a single calendar's events from its ICS feed
+ * Also syncs events to Google Calendar for all members
+ */
+export const syncCalendar = async (calendarId: string): Promise<{
+  success: boolean;
+  eventsAdded: number;
+  eventsUpdated: number;
+  eventsDeleted: number;
+  error?: string;
+}> => {
+  // ... (See actual implementation in codebase)
+  // After syncing events, calls syncCalendarEventsToMembers(calendarId)
+};
 
-  // Detect all-day events
-  const isAllDay = startDate.isDate;
+/**
+ * Sync all enabled calendars
+ */
+export const syncAllCalendars = async (): Promise<{
+  totalCalendars: number;
+  successCount: number;
+  errorCount: number;
+  results: Array<{ calendarId: string; success: boolean; error?: string }>;
+}>;
 
-  // Convert to JavaScript Date objects (UTC)
-  const startTime = startDate.toJSDate();
-  const endTime = endDate.toJSDate();
+/**
+ * Sync all events from a calendar to all members' Google Calendars
+ * Called after ICS sync completes
+ */
+export async function syncCalendarEventsToMembers(calendarId: string): Promise<void> {
+  const events = await prisma.event.findMany({
+    where: { event_calendar_id: calendarId },
+    select: { id: true, title: true },
+  });
 
-  // Get last modified time
-  const lastModifiedIcal = event.component.getFirstPropertyValue('last-modified');
-  const lastModified = lastModifiedIcal ? lastModifiedIcal.toJSDate() : new Date();
-
-  return {
-    ics_uid: icsUid,
-    title,
-    description,
-    location,
-    start_time: startTime,
-    end_time: endTime,
-    is_all_day: isAllDay,
-    last_modified: lastModified,
-  };
+  for (const event of events) {
+    await syncMainEventToAllMembers(event.id);
+  }
 }
 ```
 
@@ -386,6 +519,10 @@ function parseEventWithTimezone(event: ICAL.Event, calendarTimezone: string): Pa
 
 ## RECURRING EVENTS
 
+### Current Status: NOT IMPLEMENTED
+
+Recurring event expansion is **not currently implemented**. The parser treats recurring events as single events without expanding their occurrences.
+
 ### Recurrence Rules (RRULE)
 
 ICS supports recurring events using the `RRULE` property:
@@ -400,7 +537,9 @@ RRULE:FREQ=WEEKLY;COUNT=10
 RRULE:FREQ=DAILY;UNTIL=20240420T000000Z
 ```
 
-### Expansion Strategy
+### Possible Future Implementation
+
+If recurring event expansion is needed in the future:
 
 **Approach:** Expand recurring events into individual instances during ICS sync.
 
@@ -409,79 +548,10 @@ RRULE:FREQ=DAILY;UNTIL=20240420T000000Z
 - Easier conflict detection
 - Consistent data model (no special handling for recurring events)
 
-### Implementation
-
-```typescript
-function expandRecurringEvent(event: ICAL.Event, calendarTimezone: string): ParsedEvent[] {
-  const expandedEvents: ParsedEvent[] = [];
-
-  // Define expansion window (next 1 year)
-  const now = ICAL.Time.now();
-  const oneYearFromNow = now.clone();
-  oneYearFromNow.year += 1;
-
-  // Create iterator for recurrence
-  const iterator = event.iterator();
-
-  let occurrence: ICAL.Time;
-  while ((occurrence = iterator.next())) {
-    // Stop if beyond expansion window
-    if (occurrence.compare(oneYearFromNow) > 0) {
-      break;
-    }
-
-    // Skip if before today
-    if (occurrence.compare(now) < 0) {
-      continue;
-    }
-
-    // Calculate duration
-    const duration = event.duration;
-    const startTime = occurrence.toJSDate();
-    const endTime = duration
-      ? new Date(startTime.getTime() + duration.toSeconds() * 1000)
-      : new Date(startTime.getTime() + 60 * 60 * 1000); // Default 1 hour
-
-    // Create unique UID for each occurrence
-    const occurrenceUid = `${event.uid}-${occurrence.toString()}`;
-
-    expandedEvents.push({
-      ics_uid: occurrenceUid,
-      title: event.summary || 'Untitled Event',
-      description: event.description || null,
-      location: event.location || null,
-      start_time: startTime,
-      end_time: endTime,
-      is_all_day: occurrence.isDate,
-      last_modified: new Date(),
-    });
-
-    // Safety limit: max 365 occurrences
-    if (expandedEvents.length >= 365) {
-      logger.warn('Recurring event expansion limit reached', { uid: event.uid });
-      break;
-    }
-  }
-
-  logger.info('Expanded recurring event', {
-    uid: event.uid,
-    occurrences: expandedEvents.length,
-  });
-
-  return expandedEvents;
-}
-```
-
-### Handling Exceptions (EXDATE)
-
-Some recurring events have exceptions (specific dates excluded):
-
-```
-RRULE:FREQ=WEEKLY;COUNT=10
-EXDATE:20240327T160000Z
-```
-
-**ical.js automatically handles this** - the iterator skips exception dates.
+**Notes:**
+- Most ICS feeds from sports leagues (TeamSnap, etc.) pre-expand recurring events
+- Each occurrence appears as a separate VEVENT with its own UID
+- This is why explicit recurring event handling hasn't been needed
 
 ---
 
@@ -826,69 +896,57 @@ fs.writeFileSync('tests/fixtures/sample.ics', sampleIcs);
 ## SUMMARY CHECKLIST
 
 ### Library Setup
-- [ ] ical.js installed and configured
-- [ ] TypeScript types installed
+- [x] `ical.js` installed and configured (validation)
+- [x] `node-ical` installed and configured (sync)
+- [x] `axios` for HTTP requests
+- [x] TypeScript types installed
 
 ### Parsing Implementation
-- [ ] Fetch ICS feed with axios (timeout, user-agent)
-- [ ] Parse ICS string with ical.js
-- [ ] Extract VEVENT components
-- [ ] Map ICS properties to database fields
-- [ ] Handle missing optional fields (title, description, location)
-- [ ] Calculate end time from DURATION if DTEND missing
+- [x] Two services: `icsService.ts` (validation) and `icsSyncService.ts` (sync)
+- [x] Fetch ICS feed with native fetch (validation, 10s timeout) and axios (sync, 30s timeout)
+- [x] Parse ICS data with `ical.js` and `node-ical`
+- [x] Extract VEVENT components
+- [x] Map ICS properties to database fields
+- [x] Handle missing optional fields (title, description, location)
+- [x] Calculate end time from DURATION if DTEND missing (default 1 hour)
 
 ### Timezone Handling
-- [ ] Convert all times to UTC for database storage
-- [ ] Handle UTC times (Z suffix)
-- [ ] Handle local times with TZID
-- [ ] Handle floating times with calendar default timezone
-- [ ] Use PostgreSQL timestamptz for automatic UTC conversion
+- [x] Convert all times to UTC for database storage
+- [x] Handle UTC times (Z suffix)
+- [x] Handle local times with TZID (via library)
+- [x] Use PostgreSQL timestamptz for automatic UTC conversion
 
 ### Recurring Events
-- [ ] Detect recurring events (RRULE property)
-- [ ] Expand recurring events into individual instances
-- [ ] Generate unique UIDs for each occurrence
-- [ ] Limit expansion to next 1 year
-- [ ] Handle exception dates (EXDATE)
-- [ ] Safety limit (max 365 occurrences)
+- [ ] NOT IMPLEMENTED - recurring events not expanded
+- [x] Most ICS feeds from sports leagues pre-expand recurring events
 
 ### Validation
-- [ ] Validate ICS URL format
-- [ ] Reject private/local IPs in production
-- [ ] Validate required fields (UID, start_time, end_time)
-- [ ] Validate end_time > start_time
-- [ ] Validate field lengths (title max 255 chars)
-- [ ] Skip invalid events with warning logs
+- [x] ICS feed validation service (`validateICSFeed`)
+- [x] Calendar name extraction
+- [x] Event count and date range extraction
+- [x] Skip events without valid start time
+- [ ] Private/local IP rejection (not implemented)
+- [ ] Field length validation (not implemented)
+
+### Sync Features
+- [x] Sync enabled/disabled flag per calendar
+- [x] Event diff (add/update/delete) based on UID
+- [x] Conditional updates based on `last_modified` timestamp
+- [x] Sync status tracking (`last_sync_at`, `last_sync_status`, `last_sync_error`)
+- [x] Google Calendar sync after ICS sync (`syncCalendarEventsToMembers`)
 
 ### Error Handling
-- [ ] Handle network errors (timeout, unreachable)
-- [ ] Handle parsing errors (invalid ICS format)
-- [ ] Handle individual event parsing failures
-- [ ] Log errors with context
-- [ ] Graceful degradation (skip invalid events, continue processing)
-
-### Description Parsing (Optional)
-- [ ] Unescape ICS special characters (\\n, \\,, \\\\)
-- [ ] Extract structured data (address patterns)
-- [ ] Clean description text
+- [x] Handle network errors (timeout, unreachable)
+- [x] Handle parsing errors (invalid ICS format)
+- [x] Update calendar with error status on failure
+- [x] Console logging for errors
 
 ### Testing
 - [ ] Unit tests for valid ICS parsing
 - [ ] Unit tests for all-day events
-- [ ] Unit tests for recurring events
 - [ ] Unit tests for missing fields
-- [ ] Unit tests for invalid ICS
 - [ ] Integration tests with real feeds
-- [ ] Sample ICS fixtures for testing
 
 ---
 
-## ALL PHASES COMPLETE! 🎉
-
-**Phase 1:** ✅ Database, API, Auth, Configuration, Dev Setup
-**Phase 2:** ✅ Error Handling, WebSockets, Background Jobs
-**Phase 3:** ✅ Google Maps, Google Calendar, ICS Parsing
-
-**You now have complete technical specifications for all aspects of the Family Scheduling Application!**
-
-**Ready to start coding?** Refer to [DEVELOPMENT_SETUP.md](./DEVELOPMENT_SETUP.md) to begin implementation.
+**Next Steps:** Proceed to [BACKGROUND_JOBS.md](./BACKGROUND_JOBS.md) for background job specifications.

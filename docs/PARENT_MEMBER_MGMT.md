@@ -11,7 +11,7 @@ This document defines how users manage parent members on Event Calendars: inviti
 - Any existing parent member can invite others to an Event Calendar
 - Any parent member can remove others, or leave themselves
 - Removal deletes all events from removed member's Google Calendar
-- Invitations valid forever (no expiration)
+- **Invitations expire after 30 days** (see `expires_at` field in database)
 - Invitations can be resent or canceled
 - Partial membership supported (can be member of some Event Calendars but not others for same child)
 - Ownership transfer deferred to Phase 2
@@ -526,7 +526,7 @@ All events have been removed from your calendar.
 └─────────────────────────────────────┘
 ```
 
-**Note:** Invitations never expire, so old links still work
+**Note:** Invitations expire after 30 days. Resending generates a new token and resets expiration.
 
 ---
 
@@ -797,24 +797,38 @@ All events have been removed from your calendar.
 
 ## TECHNICAL REQUIREMENTS
 
-### Parent Member Data Model
+### EventCalendarMembership Data Model
 
-**Database Fields:**
-- `id` (UUID, primary key)
-- `event_calendar_id` (foreign key)
-- `user_id` (foreign key)
-- `role` (enum: 'owner' or 'member')
-- `joined_at` (timestamp)
-- `invited_by` (foreign key to user, nullable)
+**Note:** The implementation uses a single unified `EventCalendarMembership` model (not separate Parent Member and Invitation models):
 
-**Invitation Model:**
-- `id` (UUID, primary key)
-- `event_calendar_id` (foreign key)
-- `email` (string)
-- `token` (UUID, unique)
-- `invited_by` (foreign key to user)
-- `invited_at` (timestamp)
-- `status` (enum: 'pending', 'accepted', 'declined', 'canceled')
+```prisma
+// backend/prisma/schema.prisma
+model EventCalendarMembership {
+  id                  String    @id @default(uuid()) @db.Uuid
+  event_calendar_id   String    @db.Uuid
+  user_id             String?   @db.Uuid // Null until invitation accepted
+  invited_email       String    @db.VarChar(255)
+  invitation_token    String    @unique @db.VarChar(255)
+  status              String    @default("pending") @db.VarChar(20) // pending, accepted, declined
+  invited_by_user_id  String    @db.Uuid
+  invited_at          DateTime  @default(now()) @db.Timestamptz(6)
+  responded_at        DateTime? @db.Timestamptz(6)
+  expires_at          DateTime? @db.Timestamptz(6) // Invitations expire after 30 days
+  created_at          DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at          DateTime  @updatedAt @db.Timestamptz(6)
+
+  // Relationships
+  event_calendar      EventCalendar @relation(...)
+  user                User?         @relation(name: "membership", ...)
+  invited_by          User          @relation(name: "invitedBy", ...)
+}
+```
+
+**Key Points:**
+- Single model handles both invitations and active memberships
+- `user_id` is null when invitation is pending, set when accepted
+- `status`: 'pending', 'accepted', or 'declined' (no 'canceled' - deleted instead)
+- Ownership is tracked in `EventCalendar.owner_id`, not in membership role
 
 ---
 
@@ -835,55 +849,76 @@ All events have been removed from your calendar.
 
 ### Real-Time Updates
 
-**WebSocket Events:**
-- `member_invited` - New invitation sent
-- `member_joined` - Member accepted invitation
-- `member_removed` - Member removed (by self or others)
-- `invitation_canceled` - Pending invitation canceled
-- `invitation_declined` - Invitation declined
+**WebSocket Events (from `src/config/socket.ts`):**
+- `INVITATION_RECEIVED` - New invitation sent (pending)
+- `MEMBER_ADDED` - Member accepted invitation or existing user added directly
+- `MEMBER_REMOVED` - Member removed (by self or others)
+
+**Event Data:**
+```typescript
+// INVITATION_RECEIVED
+{ calendar_id: string, invited_email: string }
+
+// MEMBER_ADDED
+{ calendar_id: string, user_id: string, user_email: string }
+
+// MEMBER_REMOVED
+{ calendar_id: string, user_name: string, user_email: string }
+```
 
 **Subscriptions:**
-- All Event Calendar members subscribed to member events
+- All Event Calendar members are auto-joined to `calendar:<calendarId>` room on socket connect
 - Updates push immediately to all connected clients
 
 ---
 
 ### API Endpoints
 
-**Invite Member:**
-- `POST /api/event-calendars/:id/invitations`
+**Actual implementation in `src/routes/invitations.ts`:**
+
+**Send Invitation:**
+- `POST /api/event-calendars/:calendarId/invitations`
 - Body: `{ email }`
-- Returns: Invitation object
+- Returns: Membership object
+- Note: If invitee is existing user, adds them directly (status='accepted')
+
+**Bulk Invitations:**
+- `POST /api/event-calendars/:calendarId/invitations/bulk`
+- Body: CSV file upload (emails, one per line or comma-separated)
+- Returns: `{ total, successful, failed, results[] }`
+
+**Get Members:**
+- `GET /api/event-calendars/:calendarId/members`
+- Returns: Array of members and pending invitations
+
+**Get Pending Invitations (for current user):**
+- `GET /api/invitations/pending`
+- Returns: Array of pending invitations for current user
 
 **Accept Invitation:**
 - `POST /api/invitations/:token/accept`
-- Returns: Member object, creates Google Calendar events
+- Returns: Membership object, syncs events to new member's Google Calendar
 
 **Decline Invitation:**
 - `POST /api/invitations/:token/decline`
-- Returns: Success confirmation
-
-**Remove Member:**
-- `DELETE /api/event-calendars/:id/members/:user_id`
-- Deletes Google Calendar events, unassigns events
-- Returns: Success confirmation
-
-**Leave Calendar:**
-- `DELETE /api/event-calendars/:id/members/me`
-- Deletes Google Calendar events, unassigns events
-- Returns: Success confirmation
+- Returns: Membership object with status='declined'
 
 **Resend Invitation:**
 - `POST /api/invitations/:id/resend`
-- Returns: New invitation sent confirmation
+- Returns: Updated invitation
 
 **Cancel Invitation:**
 - `DELETE /api/invitations/:id`
-- Returns: Success confirmation
+- Returns: 204 No Content
 
-**Get Members:**
-- `GET /api/event-calendars/:id/members`
-- Returns: Array of members and pending invitations
+**Remove Member:**
+- `DELETE /api/memberships/:id`
+- Deletes Google Calendar events, unassigns events
+- Returns: Success with unassigned events info
+
+**Get Family Members:**
+- `GET /api/family-members`
+- Returns: All users who have been part of any of the user's calendars
 
 ---
 

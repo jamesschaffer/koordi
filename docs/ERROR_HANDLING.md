@@ -205,183 +205,233 @@ Examples:
 
 ---
 
-## ERROR HANDLING MIDDLEWARE
+## ERROR HANDLING IMPLEMENTATION
 
-### Global Error Handler
+### Current Approach: Inline Error Handling
+
+**Status:** NO GLOBAL ERROR HANDLER MIDDLEWARE
+
+Errors are currently handled inline within each route using try/catch blocks:
 
 ```typescript
-// src/middleware/error-handler.ts
-import { Request, Response, NextFunction } from 'express';
-import { Prisma } from '@prisma/client';
-import jwt from 'jsonwebtoken';
-import logger from '../utils/logger';
+// Actual pattern in src/routes/event.ts
+router.get('/:id', async (req: Request, res: Response) => {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
 
-export interface AppError extends Error {
-  statusCode?: number;
-  errorCode?: string;
-  details?: any;
+    const event = await eventService.getEventById(req.params.id, userId);
+
+    if (!event) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+
+    res.json(event);
+  } catch (error) {
+    console.error('Get event error:', error);
+    res.status(500).json({ error: 'Failed to fetch event' });
+  }
+});
+```
+
+### Concurrent Modification Handling
+
+The event assignment route handles optimistic locking failures:
+
+```typescript
+// src/routes/event.ts - PATCH /api/events/:id/assign
+router.patch('/:id/assign', async (req: Request, res: Response) => {
+  try {
+    const event = await eventService.assignEvent(
+      req.params.id,
+      userId,
+      assigned_to_user_id,
+      expected_version
+    );
+    res.json(event);
+  } catch (error: any) {
+    // Handle concurrent modification (optimistic locking failure)
+    if (error instanceof ConcurrentModificationError) {
+      return res.status(409).json({
+        error: 'Event was modified by another user',
+        code: 'CONCURRENT_MODIFICATION',
+        details: {
+          expected_version: error.expectedVersion,
+          actual_version: error.actualVersion,
+          current_state: error.currentState,
+        },
+        message: 'The event has been updated since you last viewed it.',
+      });
+    }
+    res.status(500).json({ error: 'Failed to assign event' });
+  }
+});
+```
+
+### Error Response Helper Functions
+
+The `src/utils/errors.ts` provides helper functions:
+
+```typescript
+// Create a safe error response for API responses
+export function createErrorResponse(error: Error) {
+  if (error instanceof AppError) {
+    return {
+      error: {
+        code: error.code,
+        message: error.message,
+        ...(process.env.NODE_ENV !== 'production' && { context: error.context }),
+      },
+      statusCode: error.statusCode,
+    };
+  }
+
+  // Don't leak internal error details in production
+  return {
+    error: {
+      code: 'INTERNAL_SERVER_ERROR',
+      message: process.env.NODE_ENV === 'production'
+        ? 'An internal server error occurred'
+        : error.message,
+    },
+    statusCode: 500,
+  };
 }
 
-export function errorHandler(
-  err: AppError,
-  req: Request,
-  res: Response,
-  next: NextFunction
-) {
-  // Generate request ID if not present
-  const requestId = req.headers['x-request-id'] as string || generateRequestId();
+// Helper to determine if an error is operational (expected)
+export function isOperationalError(error: Error): boolean {
+  return error instanceof AppError;
+}
 
-  // Default to 500 Internal Server Error
-  let statusCode = err.statusCode || 500;
-  let errorCode = err.errorCode || 'SYSTEM_INTERNAL_ERROR';
-  let message = err.message || 'An unexpected error occurred';
-  let details = err.details;
-
-  // JWT Errors
-  if (err instanceof jwt.TokenExpiredError) {
-    statusCode = 401;
-    errorCode = 'AUTH_EXPIRED_TOKEN';
-    message = 'Your session has expired. Please log in again';
-  } else if (err instanceof jwt.JsonWebTokenError) {
-    statusCode = 401;
-    errorCode = 'AUTH_INVALID_TOKEN';
-    message = 'Session invalid. Please log in again';
-  }
-
-  // Prisma Errors
-  else if (err instanceof Prisma.PrismaClientKnownRequestError) {
-    switch (err.code) {
-      case 'P2002': // Unique constraint violation
-        statusCode = 409;
-        errorCode = 'VALIDATION_DUPLICATE';
-        message = `A record with this ${err.meta?.target} already exists`;
-        break;
-      case 'P2025': // Record not found
-        statusCode = 404;
-        errorCode = 'RESOURCE_NOT_FOUND';
-        message = 'Resource not found';
-        break;
-      case 'P2003': // Foreign key constraint violation
-        statusCode = 400;
-        errorCode = 'VALIDATION_INVALID_REFERENCE';
-        message = 'Invalid reference to related resource';
-        break;
-      default:
-        statusCode = 500;
-        errorCode = 'SYSTEM_DATABASE_ERROR';
-        message = 'A database error occurred';
-    }
-  }
-
-  // Validation Errors (from Joi, Zod, etc.)
-  else if (err.name === 'ValidationError') {
-    statusCode = 400;
-    errorCode = 'VALIDATION_ERROR';
-    message = 'Invalid input data';
-    details = err.details;
-  }
-
-  // Log error (different levels based on status code)
-  if (statusCode >= 500) {
-    logger.error('Server error', {
-      requestId,
-      errorCode,
-      statusCode,
-      message: err.message,
-      stack: err.stack,
-      path: req.path,
-      method: req.method,
-      userId: req.user?.id,
-    });
-  } else if (statusCode >= 400) {
-    logger.warn('Client error', {
-      requestId,
-      errorCode,
-      statusCode,
-      message,
-      path: req.path,
-      method: req.method,
-      userId: req.user?.id,
-    });
-  }
-
-  // Send error response
-  const response: any = {
-    error: errorCode,
-    message,
-    timestamp: new Date().toISOString(),
-    path: req.path,
-    requestId,
+// Format error for logging
+export function formatErrorForLogging(error: Error): Record<string, any> {
+  const baseLog = {
+    name: error.name,
+    message: error.message,
+    stack: error.stack,
   };
 
-  // Include details in development only
-  if (process.env.NODE_ENV === 'development' && details) {
-    response.details = details;
+  if (error instanceof AppError) {
+    return {
+      ...baseLog,
+      code: error.code,
+      statusCode: error.statusCode,
+      context: error.context,
+      isOperational: true,
+    };
   }
 
-  // Include stack trace in development only
-  if (process.env.NODE_ENV === 'development') {
-    response.stack = err.stack;
-  }
-
-  res.status(statusCode).json(response);
-}
-
-function generateRequestId(): string {
-  return `req_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+  return { ...baseLog, isOperational: false };
 }
 ```
+
+**Note:** There is no global error handler middleware using `app.use((err, req, res, next) => ...)`. Each route handles errors individually.
 
 ### Custom Error Classes
 
 ```typescript
 // src/utils/errors.ts
 
+/**
+ * Base application error with context
+ */
 export class AppError extends Error {
   constructor(
-    public statusCode: number,
-    public errorCode: string,
-    public message: string,
-    public details?: any
+    message: string,
+    public readonly code: string,
+    public readonly statusCode: number = 500,
+    public readonly context?: Record<string, any>
   ) {
     super(message);
-    this.name = 'AppError';
+    this.name = this.constructor.name;
     Error.captureStackTrace(this, this.constructor);
   }
 }
 
+export class ConfigurationError extends AppError {
+  constructor(message: string, context?: Record<string, any>) {
+    super(message, 'CONFIGURATION_ERROR', 500, context);
+  }
+}
+
+export class DatabaseError extends AppError {
+  constructor(message: string, context?: Record<string, any>) {
+    super(message, 'DATABASE_ERROR', 500, context);
+  }
+}
+
+export class ExternalAPIError extends AppError {
+  constructor(
+    message: string,
+    public readonly service: string,
+    statusCode: number = 502,
+    context?: Record<string, any>
+  ) {
+    super(message, 'EXTERNAL_API_ERROR', statusCode, { ...context, service });
+  }
+}
+
 export class AuthenticationError extends AppError {
-  constructor(errorCode: string, message: string) {
-    super(401, errorCode, message);
-    this.name = 'AuthenticationError';
-  }
-}
-
-export class AuthorizationError extends AppError {
-  constructor(errorCode: string, message: string) {
-    super(403, errorCode, message);
-    this.name = 'AuthorizationError';
-  }
-}
-
-export class NotFoundError extends AppError {
-  constructor(errorCode: string, message: string) {
-    super(404, errorCode, message);
-    this.name = 'NotFoundError';
+  constructor(message: string, context?: Record<string, any>) {
+    super(message, 'AUTHENTICATION_ERROR', 401, context);
   }
 }
 
 export class ValidationError extends AppError {
-  constructor(message: string, details?: any) {
-    super(400, 'VALIDATION_ERROR', message, details);
-    this.name = 'ValidationError';
+  constructor(message: string, context?: Record<string, any>) {
+    super(message, 'VALIDATION_ERROR', 400, context);
+  }
+}
+
+export class NotFoundError extends AppError {
+  constructor(resource: string, identifier?: string, context?: Record<string, any>) {
+    const message = identifier
+      ? `${resource} with identifier '${identifier}' not found`
+      : `${resource} not found`;
+    super(message, 'NOT_FOUND', 404, { ...context, resource, identifier });
   }
 }
 
 export class ConflictError extends AppError {
-  constructor(errorCode: string, message: string) {
-    super(409, errorCode, message);
-    this.name = 'ConflictError';
+  constructor(message: string, context?: Record<string, any>) {
+    super(message, 'CONFLICT', 409, context);
+  }
+}
+
+export class RateLimitError extends AppError {
+  constructor(message: string, retryAfter?: number, context?: Record<string, any>) {
+    super(message, 'RATE_LIMIT_EXCEEDED', 429, { ...context, retryAfter });
+  }
+}
+
+export class EncryptionError extends AppError {
+  constructor(message: string, context?: Record<string, any>) {
+    super(message, 'ENCRYPTION_ERROR', 500, context);
+  }
+}
+```
+
+### Concurrent Modification Error
+
+A separate error class for optimistic locking:
+
+```typescript
+// src/errors/ConcurrentModificationError.ts
+export class ConcurrentModificationError extends Error {
+  constructor(
+    public resourceType: string,
+    public resourceId: string,
+    public expectedVersion: number,
+    public actualVersion: number,
+    public currentState?: any
+  ) {
+    super(
+      `${resourceType} ${resourceId} was modified by another user. ` +
+      `Expected version ${expectedVersion}, but found ${actualVersion}`
+    );
+    this.name = 'ConcurrentModificationError';
   }
 }
 ```
@@ -446,146 +496,52 @@ router.get('/:id', authenticateJWT, asyncHandler(async (req, res) => {
 
 ## LOGGING STRATEGY
 
-### Log Levels
+### Current Implementation: Console Logging
 
-| Level | Usage | Examples |
-|-------|-------|----------|
-| **error** | Unrecoverable errors | Database connection lost, external service down |
-| **warn** | Recoverable errors, unexpected states | Rate limit hit, Google API quota warning |
-| **info** | Important business events | User login, calendar created, event assigned |
-| **debug** | Detailed diagnostic info | SQL queries, API request/response bodies |
+**Status:** NO STRUCTURED LOGGING LIBRARY
 
-### Winston Logger Configuration
+The application uses `console.log`, `console.error`, and `console.warn` directly throughout the codebase, often with emoji prefixes for visual distinction:
 
 ```typescript
-// src/utils/logger.ts
-import winston from 'winston';
+// Actual logging patterns used in the codebase
+console.log(`🔄 Job ${job.id} has started processing`);
+console.log(`✅ Job ${job.id} completed:`, result);
+console.error(`❌ Job ${job.id} failed:`, err.message);
+console.warn(`⚠️  Job ${job.id} has stalled`);
 
-const logFormat = winston.format.combine(
-  winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
-  winston.format.errors({ stack: true }),
-  winston.format.splat(),
-  process.env.LOG_FORMAT === 'json'
-    ? winston.format.json()
-    : winston.format.printf(({ timestamp, level, message, ...meta }) => {
-        return `${timestamp} [${level.toUpperCase()}]: ${message} ${
-          Object.keys(meta).length ? JSON.stringify(meta) : ''
-        }`;
-      })
-);
+// Route error logging
+console.error('Get events error:', error);
+console.error('Assign event error:', error);
 
-const logger = winston.createLogger({
-  level: process.env.LOG_LEVEL || 'info',
-  format: logFormat,
-  transports: [
-    // Console output
-    new winston.transports.Console({
-      format: process.env.NODE_ENV === 'development'
-        ? winston.format.combine(winston.format.colorize(), logFormat)
-        : logFormat,
-    }),
-
-    // File output (error logs)
-    new winston.transports.File({
-      filename: 'logs/error.log',
-      level: 'error',
-      maxsize: 10485760, // 10MB
-      maxFiles: 5,
-    }),
-
-    // File output (combined logs)
-    new winston.transports.File({
-      filename: 'logs/combined.log',
-      maxsize: 10485760, // 10MB
-      maxFiles: 5,
-    }),
-  ],
-});
-
-// Production: send to external service (e.g., Datadog, CloudWatch)
-if (process.env.NODE_ENV === 'production') {
-  // Example: Add Datadog transport
-  // logger.add(new DatadogTransport({ apiKey: process.env.DATADOG_API_KEY }));
-}
-
-export default logger;
+// Service logging
+console.log(`[GET /api/events] Request from user: ${userEmail} (${userId})`);
+console.log(`[GET /api/events] Filters:`, JSON.stringify(filters));
 ```
 
-### Structured Logging Examples
+### Log Prefixes Used
 
-```typescript
-// src/services/event-service.ts
-import logger from '../utils/logger';
+| Emoji | Usage |
+|-------|-------|
+| `🔄` | Processing started |
+| `✅` | Success |
+| `❌` | Error |
+| `⚠️` | Warning/stalled |
+| `⏳` | Waiting |
+| `🚀` | Server startup |
+| `📊` | Health check |
+| `🔧` | Configuration/environment |
+| `🔌` | WebSocket |
+| `📅` | Scheduler |
+| `✓` | Validation passed |
 
-export async function assignEvent(eventId: string, userId: string) {
-  logger.info('Assigning event', {
-    eventId,
-    userId,
-    action: 'event_assignment',
-  });
+### Not Implemented
 
-  try {
-    const event = await prisma.event.update({
-      where: { id: eventId },
-      data: { assigned_to_user_id: userId },
-    });
-
-    logger.info('Event assigned successfully', {
-      eventId,
-      userId,
-      action: 'event_assignment_success',
-    });
-
-    return event;
-  } catch (error) {
-    logger.error('Event assignment failed', {
-      eventId,
-      userId,
-      action: 'event_assignment_failed',
-      error: error.message,
-      stack: error.stack,
-    });
-    throw error;
-  }
-}
-```
-
-### Request Logging Middleware
-
-```typescript
-// src/middleware/request-logger.ts
-import { Request, Response, NextFunction } from 'express';
-import logger from '../utils/logger';
-
-export function requestLogger(req: Request, res: Response, next: NextFunction) {
-  const startTime = Date.now();
-
-  // Log request
-  logger.info('Incoming request', {
-    method: req.method,
-    path: req.path,
-    query: req.query,
-    userId: req.user?.id,
-    ip: req.ip,
-  });
-
-  // Log response
-  res.on('finish', () => {
-    const duration = Date.now() - startTime;
-    const logLevel = res.statusCode >= 500 ? 'error' : res.statusCode >= 400 ? 'warn' : 'info';
-
-    logger[logLevel]('Request completed', {
-      method: req.method,
-      path: req.path,
-      statusCode: res.statusCode,
-      duration: `${duration}ms`,
-      userId: req.user?.id,
-    });
-  });
-
-  next();
-}
-```
+- Winston or other structured logging library
+- Configurable log levels
+- File-based logging
+- Request logging middleware
+- Structured JSON logs for production
+- Log aggregation service integration
 
 ---
 
@@ -593,461 +549,148 @@ export function requestLogger(req: Request, res: Response, next: NextFunction) {
 
 ### Health Check Endpoint
 
+A basic health check endpoint is implemented:
+
 ```typescript
-// src/routes/health.ts
-import { Router } from 'express';
-import { PrismaClient } from '@prisma/client';
-import redis from '../lib/redis';
-
-const router = Router();
-const prisma = new PrismaClient();
-
-router.get('/health', async (req, res) => {
-  const health = {
+// src/index.ts
+app.get('/api/health', (req, res) => {
+  res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
-    checks: {
-      database: 'unknown',
-      redis: 'unknown',
-    },
-  };
-
-  // Database check
-  try {
-    await prisma.$queryRaw`SELECT 1`;
-    health.checks.database = 'ok';
-  } catch (error) {
-    health.checks.database = 'error';
-    health.status = 'degraded';
-  }
-
-  // Redis check
-  try {
-    await redis.ping();
-    health.checks.redis = 'ok';
-  } catch (error) {
-    health.checks.redis = 'error';
-    health.status = 'degraded';
-  }
-
-  const statusCode = health.status === 'ok' ? 200 : 503;
-  res.status(statusCode).json(health);
-});
-
-export default router;
-```
-
-### Sentry Integration
-
-```typescript
-// src/app.ts
-import * as Sentry from '@sentry/node';
-
-if (process.env.SENTRY_DSN) {
-  Sentry.init({
-    dsn: process.env.SENTRY_DSN,
-    environment: process.env.NODE_ENV,
-    tracesSampleRate: 0.1, // Sample 10% of transactions
-    beforeSend(event, hint) {
-      // Filter sensitive data
-      if (event.request?.headers) {
-        delete event.request.headers.authorization;
-      }
-      return event;
-    },
+    environment: process.env.NODE_ENV || 'development',
   });
-
-  // Request handler (must be first middleware)
-  app.use(Sentry.Handlers.requestHandler());
-
-  // Tracing handler
-  app.use(Sentry.Handlers.tracingHandler());
-
-  // Error handler (must be after all routes)
-  app.use(Sentry.Handlers.errorHandler());
-}
+});
 ```
 
-### Custom Metrics (Prometheus)
+**Limitations:**
+- Does not check database connectivity
+- Does not check Redis connectivity
+- Does not check external API availability
+- Always returns 200 OK (no degraded status)
 
-```typescript
-// src/utils/metrics.ts
-import prometheus from 'prom-client';
+### Not Implemented
 
-const register = new prometheus.Registry();
-
-// Request duration histogram
-const httpRequestDuration = new prometheus.Histogram({
-  name: 'http_request_duration_seconds',
-  help: 'Duration of HTTP requests in seconds',
-  labelNames: ['method', 'route', 'status_code'],
-  registers: [register],
-});
-
-// Active connections gauge
-const activeConnections = new prometheus.Gauge({
-  name: 'active_connections',
-  help: 'Number of active connections',
-  registers: [register],
-});
-
-// Event assignment counter
-const eventAssignments = new prometheus.Counter({
-  name: 'event_assignments_total',
-  help: 'Total number of event assignments',
-  labelNames: ['status'],
-  registers: [register],
-});
-
-export { register, httpRequestDuration, activeConnections, eventAssignments };
-
-// Metrics endpoint
-// src/routes/metrics.ts
-import { Router } from 'express';
-import { register } from '../utils/metrics';
-
-const router = Router();
-
-router.get('/metrics', async (req, res) => {
-  res.set('Content-Type', register.contentType);
-  res.end(await register.metrics());
-});
-
-export default router;
-```
-
-### Alert Configuration (Example)
-
-```yaml
-# alerts.yml (for Prometheus Alertmanager)
-groups:
-  - name: koordi_alerts
-    rules:
-      - alert: HighErrorRate
-        expr: rate(http_requests_total{status_code=~"5.."}[5m]) > 0.05
-        for: 5m
-        labels:
-          severity: critical
-        annotations:
-          summary: "High error rate detected"
-          description: "Error rate is {{ $value }} errors/sec"
-
-      - alert: DatabaseDown
-        expr: up{job="postgres"} == 0
-        for: 1m
-        labels:
-          severity: critical
-        annotations:
-          summary: "Database is down"
-
-      - alert: SlowRequests
-        expr: histogram_quantile(0.95, http_request_duration_seconds) > 2
-        for: 10m
-        labels:
-          severity: warning
-        annotations:
-          summary: "95th percentile response time > 2s"
-```
+- Sentry error tracking integration
+- Prometheus metrics
+- Custom application metrics
+- Alert rules
+- External monitoring service integration
 
 ---
 
 ## CLIENT-SIDE ERROR HANDLING
 
-### API Client Error Handling
+### Toast Notifications with Sonner
+
+The frontend uses **Sonner** (`toast` from `sonner`) for error notifications, handled inline in React Query mutation callbacks:
 
 ```typescript
-// frontend/src/lib/api-client.ts
-import { authClient } from './auth-client';
+// Actual pattern from frontend/src/pages/Calendars.tsx
+import { toast } from 'sonner';
 
-export class ApiError extends Error {
-  constructor(
-    public statusCode: number,
-    public errorCode: string,
-    public message: string,
-    public details?: any
-  ) {
-    super(message);
-    this.name = 'ApiError';
-  }
-}
-
-export async function apiRequest(
-  url: string,
-  options: RequestInit = {}
-): Promise<any> {
-  try {
-    const response = await authClient.fetch(url, {
-      ...options,
-      headers: {
-        'Content-Type': 'application/json',
-        ...options.headers,
-      },
+const createCalendarMutation = useMutation({
+  mutationFn: async (data: CreateCalendarData) => {
+    const response = await fetch(`${API_URL}/calendars`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify(data),
     });
-
-    // Handle non-JSON responses
-    const contentType = response.headers.get('content-type');
-    if (!contentType?.includes('application/json')) {
-      if (!response.ok) {
-        throw new ApiError(
-          response.status,
-          'UNKNOWN_ERROR',
-          `HTTP ${response.status}: ${response.statusText}`
-        );
-      }
-      return null; // 204 No Content
-    }
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new ApiError(
-        response.status,
-        data.error || 'UNKNOWN_ERROR',
-        data.message || 'An error occurred',
-        data.details
-      );
-    }
-
-    return data;
-  } catch (error) {
-    if (error instanceof ApiError) {
-      throw error;
-    }
-
-    // Network errors
-    throw new ApiError(0, 'NETWORK_ERROR', 'Network request failed');
-  }
-}
-```
-
-### React Error Boundary
-
-```typescript
-// frontend/src/components/ErrorBoundary.tsx
-import React from 'react';
-
-interface Props {
-  children: React.ReactNode;
-}
-
-interface State {
-  hasError: boolean;
-  error?: Error;
-}
-
-export class ErrorBoundary extends React.Component<Props, State> {
-  constructor(props: Props) {
-    super(props);
-    this.state = { hasError: false };
-  }
-
-  static getDerivedStateFromError(error: Error): State {
-    return { hasError: true, error };
-  }
-
-  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-    console.error('React error boundary caught:', error, errorInfo);
-
-    // Send to error tracking service
-    if (window.Sentry) {
-      window.Sentry.captureException(error, { extra: errorInfo });
-    }
-  }
-
-  render() {
-    if (this.state.hasError) {
-      return (
-        <div className="error-boundary">
-          <h1>Something went wrong</h1>
-          <p>We're sorry for the inconvenience. Please try refreshing the page.</p>
-          <button onClick={() => window.location.reload()}>
-            Refresh Page
-          </button>
-        </div>
-      );
-    }
-
-    return this.props.children;
-  }
-}
-```
-
-### Toast Notifications for Errors
-
-```typescript
-// frontend/src/lib/error-toast.ts
-import { toast } from 'react-hot-toast';
-import { ApiError } from './api-client';
-
-export function handleApiError(error: unknown) {
-  if (error instanceof ApiError) {
-    switch (error.errorCode) {
-      case 'AUTH_EXPIRED_TOKEN':
-        toast.error('Your session has expired. Please log in again.');
-        // Redirect to login
-        window.location.href = '/login';
-        break;
-
-      case 'AUTH_NOT_CALENDAR_MEMBER':
-        toast.error("You don't have access to this calendar.");
-        break;
-
-      case 'CALENDAR_SYNC_FAILED':
-        toast.error('Calendar sync failed. We\'ll retry automatically.');
-        break;
-
-      default:
-        toast.error(error.message || 'An error occurred');
-    }
-  } else {
-    toast.error('An unexpected error occurred');
-  }
-}
-
-// Usage in React component:
-const assignEvent = useMutation({
-  mutationFn: (data) => apiRequest('/api/events/assign', { method: 'POST', body: data }),
-  onError: handleApiError,
+    if (!response.ok) throw new Error('Failed to create calendar');
+    return response.json();
+  },
+  onSuccess: () => {
+    toast.success('Calendar created successfully');
+    queryClient.invalidateQueries({ queryKey: ['calendars'] });
+  },
+  onError: (error) => {
+    toast.error('Failed to create calendar', {
+      description: error instanceof Error ? error.message : 'Unknown error',
+    });
+  },
 });
 ```
+
+### Common Error Toast Patterns
+
+```typescript
+// Validation errors
+toast.error('Please enter an ICS URL');
+toast.error('Please enter a name');
+toast.error('Please enter an email address');
+
+// API errors with descriptions
+toast.error('Failed to create calendar', {
+  description: error instanceof Error ? error.message : 'Unknown error',
+});
+
+toast.error('Failed to validate ICS feed', {
+  description: 'Please check the URL and try again',
+});
+
+// File size validation
+toast.error('Photo must be less than 5MB');
+```
+
+### Not Implemented
+
+- **React Error Boundary component** - No global error boundary exists
+- **Centralized API client** with error handling - Each component handles fetch inline
+- **Custom ApiError class** - Raw Error objects used
+- **Session expiry redirects** - Not automatically handled
+- **Error tracking integration** (Sentry) - Not implemented on frontend
 
 ---
 
 ## TESTING ERROR SCENARIOS
 
-### Unit Tests for Error Handlers
+**Status:** NO AUTOMATED TESTS
 
-```typescript
-// tests/middleware/error-handler.test.ts
-import { describe, it, expect, vi } from 'vitest';
-import { Request, Response } from 'express';
-import { errorHandler } from '../../src/middleware/error-handler';
-import { NotFoundError, AuthenticationError } from '../../src/utils/errors';
-
-describe('Error Handler Middleware', () => {
-  it('should handle NotFoundError with 404 status', () => {
-    const req = { path: '/api/events/123', method: 'GET' } as Request;
-    const res = {
-      status: vi.fn().mockReturnThis(),
-      json: vi.fn(),
-    } as unknown as Response;
-    const next = vi.fn();
-
-    const error = new NotFoundError('EVENT_NOT_FOUND', 'Event not found');
-
-    errorHandler(error, req, res, next);
-
-    expect(res.status).toHaveBeenCalledWith(404);
-    expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({
-        error: 'EVENT_NOT_FOUND',
-        message: 'Event not found',
-      })
-    );
-  });
-
-  it('should handle JWT expired error', () => {
-    const req = { path: '/api/events', method: 'GET' } as Request;
-    const res = {
-      status: vi.fn().mockReturnThis(),
-      json: vi.fn(),
-    } as unknown as Response;
-    const next = vi.fn();
-
-    const error = new jwt.TokenExpiredError('jwt expired', new Date());
-
-    errorHandler(error, req, res, next);
-
-    expect(res.status).toHaveBeenCalledWith(401);
-    expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({
-        error: 'AUTH_EXPIRED_TOKEN',
-      })
-    );
-  });
-});
-```
-
-### Integration Tests for Error Responses
-
-```typescript
-// tests/routes/events.test.ts
-import { describe, it, expect } from 'vitest';
-import request from 'supertest';
-import app from '../../src/app';
-
-describe('Events API Error Handling', () => {
-  it('should return 401 for missing token', async () => {
-    const response = await request(app).get('/api/events');
-
-    expect(response.status).toBe(401);
-    expect(response.body.error).toBe('AUTH_MISSING_TOKEN');
-  });
-
-  it('should return 404 for non-existent event', async () => {
-    const token = generateTestToken();
-    const response = await request(app)
-      .get('/api/events/non-existent-id')
-      .set('Authorization', `Bearer ${token}`);
-
-    expect(response.status).toBe(404);
-    expect(response.body.error).toBe('EVENT_NOT_FOUND');
-  });
-
-  it('should return 403 for unauthorized access', async () => {
-    const token = generateTestToken({ userId: 'user-without-access' });
-    const response = await request(app)
-      .get('/api/events/protected-event-id')
-      .set('Authorization', `Bearer ${token}`);
-
-    expect(response.status).toBe(403);
-    expect(response.body.error).toBe('AUTH_NOT_CALENDAR_MEMBER');
-  });
-});
-```
+There are no automated tests for error handling scenarios in the current codebase.
 
 ---
 
 ## SUMMARY CHECKLIST
 
 ### Backend Error Handling
-- [ ] Standard error response format implemented
-- [ ] Error code taxonomy defined for all domains
-- [ ] Custom error classes created (AppError, NotFoundError, etc.)
-- [ ] Global error handler middleware configured
-- [ ] Async error wrapper utility implemented
-- [ ] HTTP status codes mapped correctly
-- [ ] Prisma errors handled with meaningful messages
-- [ ] JWT errors handled with session expiry messages
+- [x] Custom error classes created (`AppError`, `NotFoundError`, `ValidationError`, etc.)
+- [x] Error response helper functions (`createErrorResponse`, `formatErrorForLogging`)
+- [x] `ConcurrentModificationError` for optimistic locking
+- [x] HTTP status codes used correctly in routes
+- [ ] Standard error response format (varies by route)
+- [ ] Global error handler middleware
+- [ ] Async error wrapper utility
+- [ ] Systematic Prisma error handling
+- [ ] Systematic JWT error handling
 
 ### Logging
-- [ ] Winston logger configured with levels (error, warn, info, debug)
-- [ ] Log format set (JSON for production, pretty for development)
-- [ ] Structured logging with context (userId, requestId, etc.)
-- [ ] Request logging middleware configured
-- [ ] Log rotation configured (file size, max files)
-- [ ] Sensitive data filtered from logs
+- [x] Console logging with emoji prefixes
+- [ ] Winston or structured logging library
+- [ ] Configurable log levels
+- [ ] File-based logging
+- [ ] Request logging middleware
+- [ ] Structured JSON logs for production
 
 ### Monitoring
-- [ ] Health check endpoint implemented (/health)
-- [ ] Sentry integration configured (if using)
-- [ ] Custom metrics configured (Prometheus, if using)
-- [ ] Alert rules defined (high error rate, database down, etc.)
+- [x] Basic health check endpoint (`/api/health`)
+- [ ] Health check with database/Redis verification
+- [ ] Sentry integration
+- [ ] Prometheus metrics
+- [ ] Alert rules
 
 ### Client-Side
-- [ ] API client with error handling
+- [x] Toast notifications for errors (Sonner)
+- [x] User-friendly error messages
 - [ ] React Error Boundary component
-- [ ] Toast notifications for errors
-- [ ] User-friendly error messages
-- [ ] Network error handling
+- [ ] Centralized API client with error handling
+- [ ] Custom ApiError class
 - [ ] Session expiry redirects
+- [ ] Sentry integration
 
 ### Testing
 - [ ] Unit tests for error handlers
 - [ ] Integration tests for error responses
-- [ ] Error scenario tests (401, 403, 404, 500)
-- [ ] Validation error tests
+- [ ] Error scenario tests
 
 ---
 

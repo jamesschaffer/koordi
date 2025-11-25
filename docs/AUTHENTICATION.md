@@ -31,11 +31,11 @@
      │                                              │
      │  1. Click "Sign in with Google"             │
      ├─────────────────────────────────────────────►
-     │  GET /api/auth/google/initiate              │
+     │  GET /api/auth/google                       │
      │                                              │
      │  2. Return Google OAuth URL                 │
      ◄─────────────────────────────────────────────┤
-     │  { "authUrl": "https://accounts.google..." } │
+     │  { "url": "https://accounts.google..." }    │
      │                                              │
      │  3. Redirect user to Google                 │
      ├──────────────────┐                          │
@@ -51,18 +51,19 @@
      │                                              ├──────────────────►
      │                                              │  Google Token API
      │                                              ◄──────────────────┤
-     │                                              │  { access_token, refresh_token, id_token }
+     │                                              │  { access_token, refresh_token }
      │                                              │
-     │                                              │  6. Verify ID token
+     │                                              │  6. Get user profile via oauth2 API
      │                                              │  7. Create/update User record
      │                                              │  8. Encrypt & store refresh_token
-     │                                              │  9. Generate JWT
+     │                                              │  9. Auto-accept pending invitations
+     │                                              │  10. Generate JWT
      │                                              │
-     │  10. Return JWT + user data                 │
+     │  11. Redirect to frontend with JWT          │
      ◄─────────────────────────────────────────────┤
-     │  { "token": "eyJhbG...", "user": {...} }    │
+     │  302 Redirect to /auth/callback?token=...   │
      │                                              │
-     │  11. Store JWT in memory/storage            │
+     │  12. Frontend extracts token from URL       │
      │                                              │
      └─────────────────────────────────────────────┘
 ```
@@ -73,7 +74,7 @@
 
 **Client Request:**
 ```http
-GET /api/auth/google/initiate HTTP/1.1
+GET /api/auth/google HTTP/1.1
 Host: api.koordi.app
 ```
 
@@ -85,33 +86,36 @@ import { google } from 'googleapis';
 
 const router = Router();
 
-router.get('/google/initiate', (req, res) => {
+const SCOPES = [
+  'https://www.googleapis.com/auth/userinfo.email',
+  'https://www.googleapis.com/auth/userinfo.profile',
+  'https://www.googleapis.com/auth/calendar',
+  'https://www.googleapis.com/auth/calendar.events',
+];
+
+router.get('/google', (req, res) => {
   const oauth2Client = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
     process.env.GOOGLE_CLIENT_SECRET,
     process.env.GOOGLE_REDIRECT_URI
   );
 
-  const scopes = [
-    'https://www.googleapis.com/auth/userinfo.email',
-    'https://www.googleapis.com/auth/userinfo.profile',
-    'https://www.googleapis.com/auth/calendar', // For calendar sync
-  ];
-
+  // Always use 'consent' to ensure we get a refresh token
+  // This is critical for Google Calendar sync to work
   const authUrl = oauth2Client.generateAuthUrl({
-    access_type: 'offline', // Request refresh token
-    scope: scopes,
-    prompt: 'consent', // Force consent screen to get refresh token
+    access_type: 'offline',
+    scope: SCOPES,
+    prompt: 'consent',
   });
 
-  res.json({ authUrl });
+  res.json({ url: authUrl });
 });
 ```
 
 **Client Response:**
 ```json
 {
-  "authUrl": "https://accounts.google.com/o/oauth2/v2/auth?client_id=...&redirect_uri=...&response_type=code&scope=...&access_type=offline&prompt=consent"
+  "url": "https://accounts.google.com/o/oauth2/v2/auth?client_id=...&redirect_uri=...&response_type=code&scope=...&access_type=offline&prompt=consent"
 }
 ```
 
@@ -125,94 +129,67 @@ https://api.koordi.app/api/auth/google/callback?code=4/0AY0e-g7...&scope=email+p
 
 #### Step 5-10: Token Exchange and JWT Generation
 
-**Backend Implementation:**
+**Actual Backend Implementation (`src/routes/auth.ts`):**
+
 ```typescript
-// src/routes/auth.ts
-import jwt from 'jsonwebtoken';
-import { PrismaClient } from '@prisma/client';
-import { encrypt } from '../utils/encryption';
-
-const prisma = new PrismaClient();
-
-router.get('/google/callback', async (req, res) => {
-  const { code } = req.query;
-
+router.get('/google/callback', async (req: Request, res: Response) => {
   try {
-    // 5. Exchange authorization code for tokens
-    const oauth2Client = new google.auth.OAuth2(
-      process.env.GOOGLE_CLIENT_ID,
-      process.env.GOOGLE_CLIENT_SECRET,
-      process.env.GOOGLE_REDIRECT_URI
-    );
+    const { code } = req.query;
 
-    const { tokens } = await oauth2Client.getToken(code as string);
-    oauth2Client.setCredentials(tokens);
-
-    // 6. Verify ID token and extract user info
-    const ticket = await oauth2Client.verifyIdToken({
-      idToken: tokens.id_token!,
-      audience: process.env.GOOGLE_CLIENT_ID,
-    });
-
-    const payload = ticket.getPayload();
-    const email = payload?.email;
-    const name = payload?.name;
-    const avatarUrl = payload?.picture;
-
-    if (!email) {
-      throw new Error('No email in Google ID token');
+    if (!code || typeof code !== 'string') {
+      return res.status(400).json({ error: 'Authorization code missing' });
     }
 
-    // 7. Create or update user
-    const user = await prisma.user.upsert({
-      where: { email },
-      update: {
-        name: name || email.split('@')[0],
-        avatar_url: avatarUrl,
-        google_refresh_token_enc: tokens.refresh_token
-          ? encrypt(tokens.refresh_token)
-          : undefined,
-      },
-      create: {
-        email,
-        name: name || email.split('@')[0],
-        avatar_url: avatarUrl,
-        google_refresh_token_enc: tokens.refresh_token
-          ? encrypt(tokens.refresh_token)
-          : undefined,
-      },
-    });
+    // 5. Exchange code for tokens
+    const { tokens } = await oauth2Client.getToken(code);
+    oauth2Client.setCredentials(tokens);
 
-    // 9. Generate JWT for app authentication
-    const jwtToken = jwt.sign(
-      {
-        sub: user.id,
-        email: user.email,
-      },
-      process.env.JWT_SECRET!,
-      {
-        expiresIn: '7d', // 7 days
-        issuer: 'koordi',
-        audience: 'koordi-users',
-      }
+    // 6. Get user profile via oauth2.userinfo API
+    const oauth2 = google.oauth2({ auth: oauth2Client, version: 'v2' });
+    const { data: profile } = await oauth2.userinfo.get();
+
+    if (!profile.email || !profile.name) {
+      return res.status(400).json({ error: 'Failed to get user profile' });
+    }
+
+    // 7. Get primary calendar ID
+    const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+    const { data: calendarList } = await calendar.calendarList.list();
+    const primaryCalendar = calendarList.items?.find((cal) => cal.primary);
+
+    // 8. Create or update user via findOrCreateUser service
+    const user = await findOrCreateUser(
+      { id: profile.id, email: profile.email, name: profile.name, picture: profile.picture },
+      tokens.refresh_token!,
+      primaryCalendar!.id,
     );
 
-    // 10. Return JWT and user data
-    res.json({
-      token: jwtToken,
-      user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        avatar_url: user.avatar_url,
-      },
-    });
+    // 9. Auto-accept any pending invitations for this email
+    await autoAcceptPendingInvitations(user.id, user.email);
+
+    // 10. Generate JWT with userId and email
+    const token = generateToken({ userId: user.id, email: user.email });
+
+    // 11. Check if user needs profile setup (home address required)
+    const needsSetup = !user.home_address || !user.home_latitude || !user.home_longitude;
+
+    // 12. Redirect to frontend with token (NOT JSON response)
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const setupParam = needsSetup ? '&needs_setup=true' : '';
+    res.redirect(`${frontendUrl}/auth/callback?token=${token}${setupParam}`);
   } catch (error) {
     console.error('OAuth callback error:', error);
-    res.status(500).json({ error: 'Authentication failed' });
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    res.redirect(`${frontendUrl}/auth/error?message=Authentication failed`);
   }
 });
 ```
+
+**Key Implementation Notes:**
+- Redirects to frontend with token in URL query param (NOT JSON response)
+- Auto-accepts pending invitations during login
+- Includes `needs_setup=true` flag if user has no home address
+- On error, redirects to `/auth/error` with message
 
 ---
 
@@ -220,24 +197,29 @@ router.get('/google/callback', async (req, res) => {
 
 ### JWT Payload Schema
 
+**Actual implementation from `src/utils/jwt.ts`:**
+
+```typescript
+export interface JWTPayload {
+  userId: string;
+  email: string;
+}
+```
+
 ```json
 {
-  "sub": "user-uuid-here",
+  "userId": "user-uuid-here",
   "email": "user@example.com",
   "iat": 1699564800,
-  "exp": 1700169600,
-  "iss": "koordi",
-  "aud": "koordi-users"
+  "exp": 1700169600
 }
 ```
 
 **Field Descriptions:**
-- `sub` (Subject): User UUID (primary key)
+- `userId`: User UUID (primary key) - **Note: NOT `sub`**
 - `email`: User email (for display/logging)
-- `iat` (Issued At): Unix timestamp when token was created
+- `iat` (Issued At): Unix timestamp when token was created (auto-added by jsonwebtoken)
 - `exp` (Expiration): Unix timestamp when token expires (7 days from `iat`)
-- `iss` (Issuer): Application identifier
-- `aud` (Audience): Intended recipients (validates token is for this app)
 
 ### JWT Signing Configuration
 
@@ -245,25 +227,33 @@ router.get('/google/callback', async (req, res) => {
 // src/utils/jwt.ts
 import jwt from 'jsonwebtoken';
 
-interface JwtPayload {
-  sub: string;
+const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
+const JWT_EXPIRES_IN = '7d'; // 7 days
+
+export interface JWTPayload {
+  userId: string;
   email: string;
 }
 
-export function generateToken(payload: JwtPayload): string {
-  return jwt.sign(payload, process.env.JWT_SECRET!, {
-    expiresIn: '7d',
-    issuer: 'koordi',
-    audience: 'koordi-users',
-  });
-}
+export const generateToken = (payload: JWTPayload): string => {
+  return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+};
 
-export function verifyToken(token: string): JwtPayload {
-  return jwt.verify(token, process.env.JWT_SECRET!, {
-    issuer: 'koordi',
-    audience: 'koordi-users',
-  }) as JwtPayload;
-}
+export const verifyToken = (token: string): JWTPayload => {
+  try {
+    return jwt.verify(token, JWT_SECRET) as JWTPayload;
+  } catch (error) {
+    throw new Error('Invalid or expired token');
+  }
+};
+
+export const decodeToken = (token: string): JWTPayload | null => {
+  try {
+    return jwt.decode(token) as JWTPayload;
+  } catch (error) {
+    return null;
+  }
+};
 ```
 
 ### Environment Variables
@@ -333,97 +323,19 @@ res.cookie('auth_token', jwtToken, {
 
 ### Token Refresh Flow
 
-**Option 1: Silent Refresh Before Expiration**
+**Status:** NO REFRESH ENDPOINT IMPLEMENTED
 
-```typescript
-// src/lib/auth-client.ts
-class AuthClient {
-  private refreshTimer: NodeJS.Timeout | null = null;
+The current implementation does not have a token refresh endpoint. JWTs are valid for 7 days and users must re-authenticate via Google OAuth when the token expires.
 
-  setToken(token: string) {
-    this.token = token;
-    this.scheduleRefresh(token);
-  }
+**Current Behavior:**
+- JWT expires after 7 days
+- User is redirected to Google OAuth to obtain a new token
+- No silent refresh mechanism
 
-  private scheduleRefresh(token: string) {
-    // Decode token to get expiration
-    const decoded = JSON.parse(atob(token.split('.')[1]));
-    const expiresAt = decoded.exp * 1000; // Convert to milliseconds
-    const now = Date.now();
-    const refreshAt = expiresAt - 60 * 60 * 1000; // Refresh 1 hour before expiry
-
-    const delay = refreshAt - now;
-
-    if (delay > 0) {
-      this.refreshTimer = setTimeout(() => {
-        this.refreshToken();
-      }, delay);
-    }
-  }
-
-  async refreshToken() {
-    try {
-      const response = await fetch('/api/auth/refresh', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${this.token}`,
-        },
-      });
-
-      const { token } = await response.json();
-      this.setToken(token);
-    } catch (error) {
-      console.error('Token refresh failed:', error);
-      this.clearToken();
-      // Redirect to login
-      window.location.href = '/login';
-    }
-  }
-}
-```
-
-**Backend Refresh Endpoint:**
-
-```typescript
-// src/routes/auth.ts
-router.post('/refresh', authenticateJWT, async (req, res) => {
-  // User is already authenticated via middleware
-  const user = req.user!;
-
-  // Generate new JWT
-  const newToken = generateToken({
-    sub: user.id,
-    email: user.email,
-  });
-
-  res.json({ token: newToken });
-});
-```
-
-**Option 2: Refresh on 401 Response**
-
-```typescript
-// src/lib/auth-client.ts
-async fetch(url: string, options: RequestInit = {}) {
-  let response = await this.makeRequest(url, options);
-
-  // If 401, try refreshing token once
-  if (response.status === 401 && !options.headers?.['X-Retry-After-Refresh']) {
-    await this.refreshToken();
-
-    // Retry with new token
-    response = await this.makeRequest(url, {
-      ...options,
-      headers: {
-        ...options.headers,
-        'X-Retry-After-Refresh': 'true', // Prevent infinite loops
-      },
-    });
-  }
-
-  return response;
-}
-```
+**Not Implemented:**
+- `POST /api/auth/refresh` endpoint
+- Automatic token refresh before expiration
+- Refresh on 401 response
 
 ### Google Token Refresh (Background Job)
 
@@ -493,13 +405,15 @@ export async function refreshGoogleTokensJob() {
 | | Delete Own | ✅ | ✅ | ✅ |
 | | View Other | ❌ | ❌ | ❌ |
 | **Event Calendar** | Create | ✅ | ✅ | ✅ |
-| | View | ✅ (owner) | ✅ | ❌ |
-| | Update | ✅ (owner) | ✅ | ❌ |
+| | View | ✅ | ✅ | ❌ |
+| | Update | ✅ (owner only) | ❌ | ❌ |
 | | Delete | ✅ (owner only) | ❌ | ❌ |
-| | Sync | ✅ (owner) | ✅ | ❌ |
-| **Members** | Invite | ✅ (owner) | ✅ | ❌ |
-| | Remove | ✅ (owner) | ✅ (remove others) | ❌ |
-| | Leave | ✅ | ✅ | ❌ |
+| | Sync | ✅ | ✅ | ❌ |
+| **Members** | Invite | ✅ | ✅ | ❌ |
+| | Remove Others | ✅ | ✅ | ❌ |
+| | Remove Self | ❌ (MVP) | ✅ | ❌ |
+| | Resend Invitation | ✅ | ✅ | ❌ |
+| | Cancel Invitation | ✅ | ✅ | ❌ |
 | **Child** | Create | ✅ | ✅ | ✅ |
 | | View | ✅ (via calendar) | ✅ (via calendar) | ❌ |
 | | Update | ✅ (via calendar) | ✅ (via calendar) | ❌ |
@@ -511,24 +425,32 @@ export async function refreshGoogleTokensJob() {
 ### Key Permission Rules
 
 1. **Event Calendar Ownership:**
-   - Only the original creator (owner_id) can delete calendars
-   - Members have full CRUD access to child and event data
-   - Members can invite/remove other members
+   - Only the owner can update calendar settings (name, color, ics_url)
+   - Only the owner can delete calendars
+   - Owner tracked in `EventCalendar.owner_id`
 
-2. **Child Access:**
+2. **Member Management:**
+   - **Any member** can invite new members (not just owner)
+   - **Any member** can remove other members (not just owner)
+   - Owner cannot leave calendar (must delete instead)
+   - Members can leave calendar at any time
+
+3. **Child Access:**
    - No direct ownership
    - Access granted implicitly via Event Calendar membership
    - Multiple parents can manage same child through shared calendars
 
-3. **Event Assignment:**
-   - Only members of the Event Calendar can assign/reassign events
+4. **Event Assignment:**
+   - Any member of the Event Calendar can assign/reassign events
    - Can assign to self or any other member
    - No restriction on who can assign to whom
+   - Supports optimistic locking to prevent race conditions
 
-4. **Invitations:**
-   - Any member can invite new parents
-   - Any member can remove other members (except owner cannot be removed)
-   - Members can leave calendars voluntarily
+5. **Invitations:**
+   - **Any member** can send invitations
+   - **Any member** can remove other members
+   - Invitations expire after 30 days
+   - Auto-accepted when invitee already has an account
 
 ### Authorization Helper Functions
 
@@ -792,32 +714,53 @@ export default router;
 // src/utils/encryption.ts
 import crypto from 'crypto';
 
-const ALGORITHM = 'aes-256-gcm';
-const KEY = Buffer.from(process.env.ENCRYPTION_KEY!, 'hex'); // 32-byte key
+const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || '';
+const ALGORITHM = 'aes-256-cbc';
+const IV_LENGTH = 16;
+
+export function isEncryptionConfigured(): boolean {
+  return ENCRYPTION_KEY.length === 64 && /^[0-9a-fA-F]{64}$/.test(ENCRYPTION_KEY);
+}
 
 export function encrypt(text: string): string {
-  const iv = crypto.randomBytes(16); // Initialization vector
-  const cipher = crypto.createCipheriv(ALGORITHM, KEY, iv);
+  if (!isEncryptionConfigured()) {
+    throw new Error('ENCRYPTION_KEY not properly configured');
+  }
+
+  const iv = crypto.randomBytes(IV_LENGTH);
+  const cipher = crypto.createCipheriv(
+    ALGORITHM,
+    Buffer.from(ENCRYPTION_KEY, 'hex'),
+    iv
+  );
 
   let encrypted = cipher.update(text, 'utf8', 'hex');
   encrypted += cipher.final('hex');
 
-  const authTag = cipher.getAuthTag();
-
-  // Return: IV:AuthTag:EncryptedData
-  return `${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted}`;
+  // Return: IV:EncryptedData
+  return `${iv.toString('hex')}:${encrypted}`;
 }
 
-export function decrypt(encrypted: string): string {
-  const parts = encrypted.split(':');
+export function decrypt(encryptedText: string): string {
+  if (!isEncryptionConfigured()) {
+    throw new Error('ENCRYPTION_KEY not properly configured');
+  }
+
+  const parts = encryptedText.split(':');
+  if (parts.length !== 2) {
+    throw new Error('Invalid encrypted text format');
+  }
+
   const iv = Buffer.from(parts[0], 'hex');
-  const authTag = Buffer.from(parts[1], 'hex');
-  const encryptedText = parts[2];
+  const encryptedData = parts[1];
 
-  const decipher = crypto.createDecipheriv(ALGORITHM, KEY, iv);
-  decipher.setAuthTag(authTag);
+  const decipher = crypto.createDecipheriv(
+    ALGORITHM,
+    Buffer.from(ENCRYPTION_KEY, 'hex'),
+    iv
+  );
 
-  let decrypted = decipher.update(encryptedText, 'hex', 'utf8');
+  let decrypted = decipher.update(encryptedData, 'hex', 'utf8');
   decrypted += decipher.final('utf8');
 
   return decrypted;
@@ -1124,42 +1067,42 @@ test.describe('Authentication Flow', () => {
 ## SUMMARY CHECKLIST
 
 ### Backend Implementation
-- [ ] Google OAuth 2.0 client configured with Client ID, Secret, Redirect URI
-- [ ] JWT generation with proper signing and expiration
-- [ ] JWT verification middleware (`authenticateJWT`)
-- [ ] Token encryption utilities for Google refresh tokens
-- [ ] Authorization helpers (`isCalendarMember`, `isCalendarOwner`, etc.)
-- [ ] Calendar membership/ownership middleware
-- [ ] Token refresh endpoint (`POST /api/auth/refresh`)
-- [ ] Error handling for auth failures
-- [ ] Rate limiting on auth endpoints
-- [ ] Security headers (Helmet, CORS)
+- [x] Google OAuth 2.0 client configured with Client ID, Secret, Redirect URI
+- [x] JWT generation with proper signing and 7-day expiration
+- [x] JWT verification middleware (`authenticateToken`)
+- [x] Token encryption utilities for Google refresh tokens (AES-256-CBC)
+- [x] Authorization checks via calendar membership queries
+- [x] Auto-accept pending invitations on login
+- [x] Redirect to frontend with token after OAuth callback
+- [x] `needs_setup` flag for users without home address
+- [ ] Token refresh endpoint (`POST /api/auth/refresh`) - NOT IMPLEMENTED
+- [ ] Calendar membership middleware - inline in routes
+- [ ] Rate limiting on auth endpoints - NOT IMPLEMENTED
+- [ ] Security headers (Helmet) - NOT IMPLEMENTED
 
 ### Frontend Implementation
-- [ ] Auth client with in-memory token storage
-- [ ] OAuth flow initiated on "Sign in with Google" click
-- [ ] Token storage and retrieval
-- [ ] Automatic token refresh (before expiration or on 401)
-- [ ] Request interceptor to attach Authorization header
-- [ ] Redirect to login on authentication failure
-- [ ] Protected route wrapper component
+- [x] OAuth flow initiated via Google button
+- [x] Token storage via React Context (AuthContext)
+- [x] Token extracted from URL after OAuth callback
+- [x] Authorization header attached to API requests
+- [x] Redirect to login on authentication failure
+- [x] Protected routes via PrivateRoute component
+- [ ] Automatic token refresh - NOT IMPLEMENTED (re-auth required)
 
 ### Security
-- [ ] JWT_SECRET environment variable set (256-bit minimum)
-- [ ] ENCRYPTION_KEY environment variable set (256-bit)
-- [ ] Google OAuth credentials stored securely
-- [ ] Refresh tokens encrypted in database
-- [ ] CORS properly configured for production domain
-- [ ] Rate limiting active on auth endpoints
-- [ ] Security headers configured (CSP, HSTS)
+- [x] JWT_SECRET environment variable
+- [x] ENCRYPTION_KEY environment variable (64-char hex)
+- [x] Google OAuth credentials via environment variables
+- [x] Refresh tokens encrypted in database
+- [x] CORS configured via FRONTEND_URL environment variable
+- [ ] Rate limiting on auth endpoints - NOT IMPLEMENTED
+- [ ] Security headers (Helmet, CSP, HSTS) - NOT IMPLEMENTED
 
 ### Testing
-- [ ] Unit tests for JWT generation/verification
-- [ ] Unit tests for encryption/decryption
-- [ ] Integration tests for auth routes
-- [ ] Integration tests for protected endpoints
-- [ ] E2E tests for complete OAuth flow
-- [ ] Test cases for permission edge cases
+- [ ] Unit tests for JWT generation/verification - NOT IMPLEMENTED
+- [ ] Unit tests for encryption/decryption - NOT IMPLEMENTED
+- [ ] Integration tests for auth routes - NOT IMPLEMENTED
+- [ ] E2E tests for OAuth flow - NOT IMPLEMENTED
 
 ---
 

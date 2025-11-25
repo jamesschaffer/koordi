@@ -33,69 +33,51 @@
 ### Loading Environment Variables
 
 **Backend (Node.js):**
+
+Environment variables are loaded via `dotenv` at the top of `src/index.ts` before any other imports:
+
 ```typescript
-// src/config/index.ts
+// src/index.ts
+// IMPORTANT: Load environment variables FIRST, before any other imports
 import dotenv from 'dotenv';
-
 dotenv.config();
-
-export const config = {
-  nodeEnv: process.env.NODE_ENV || 'development',
-  port: parseInt(process.env.PORT || '3000', 10),
-  database: {
-    url: process.env.DATABASE_URL!,
-  },
-  jwt: {
-    secret: process.env.JWT_SECRET!,
-    expiresIn: process.env.JWT_EXPIRES_IN || '7d',
-  },
-  google: {
-    clientId: process.env.GOOGLE_CLIENT_ID!,
-    clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
-    redirectUri: process.env.GOOGLE_REDIRECT_URI!,
-  },
-  // ... more config
-};
-
-// Validate required variables at startup
-function validateConfig() {
-  const required = [
-    'DATABASE_URL',
-    'JWT_SECRET',
-    'ENCRYPTION_KEY',
-    'GOOGLE_CLIENT_ID',
-    'GOOGLE_CLIENT_SECRET',
-    'GOOGLE_REDIRECT_URI',
-    'GOOGLE_MAPS_API_KEY',
-  ];
-
-  const missing = required.filter((key) => !process.env[key]);
-
-  if (missing.length > 0) {
-    throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
-  }
-}
-
-validateConfig();
 ```
+
+Variables are accessed directly via `process.env` throughout the codebase:
+
+```typescript
+// src/index.ts
+const PORT = process.env.PORT || 3000;
+app.use(cors({
+  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+  credentials: true,
+}));
+
+// src/utils/jwt.ts
+const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
+
+// src/utils/encryption.ts
+const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || '';
+```
+
+**Note:** There is no centralized config object or Joi-based validation. The `ENCRYPTION_KEY` is validated at module load time in `src/utils/encryption.ts`.
 
 **Frontend (Vite):**
+
+Variables prefixed with `VITE_` are accessed via `import.meta.env`:
+
 ```typescript
-// src/config.ts
-// Vite only exposes variables prefixed with VITE_
-export const config = {
-  apiUrl: import.meta.env.VITE_API_URL || 'http://localhost:3000',
-  googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY,
-  // ... more config
-};
+const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
+const mapsKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
 ```
 
-**Frontend .env:**
+**Frontend .env.example:**
 ```env
-VITE_API_URL=http://localhost:3000
-VITE_GOOGLE_MAPS_API_KEY=your-key-here
-VITE_WEBSOCKET_URL=http://localhost:3001
+VITE_API_URL=http://localhost:3000/api
+VITE_GOOGLE_MAPS_API_KEY=your_maps_api_key_here
 ```
+
+**Note:** WebSocket connections use the same URL as the API (no separate `VITE_WEBSOCKET_URL`).
 
 ---
 
@@ -166,7 +148,7 @@ openssl rand -hex 32
 ---
 
 ### 4. ENCRYPTION_KEY
-**Purpose:** AES-256-GCM key for encrypting Google refresh tokens in database
+**Purpose:** AES-256-CBC key for encrypting Google refresh tokens in database
 **Requirements:** 64 hex characters (32 bytes)
 
 ```env
@@ -297,63 +279,74 @@ Used for CORS configuration and OAuth redirects.
 
 ### WebSocket Configuration
 
-#### WEBSOCKET_PORT
-**Default:** Same as `PORT`
+**Note:** WebSocket runs on the same server/port as the HTTP API. There are no separate WebSocket configuration variables.
 
-```env
-WEBSOCKET_PORT=3001
+CORS origin for WebSocket connections uses the same `FRONTEND_URL` value as the HTTP API:
+
+```typescript
+// src/config/socket.ts
+const io = new Server(httpServer, {
+  cors: {
+    origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+    methods: ['GET', 'POST'],
+    credentials: true,
+  },
+});
 ```
-
-Use separate port if running Socket.io on different process.
-
-#### WEBSOCKET_CORS_ORIGIN
-**Default:** `FRONTEND_URL`
-
-```env
-WEBSOCKET_CORS_ORIGIN="http://localhost:5173,https://staging.koordi.app"
-```
-
-Comma-separated list of allowed WebSocket origins.
 
 ---
 
 ### Email Configuration (Optional)
 
-For sending invitation emails.
+For sending invitation emails. If `SMTP_HOST` is not set, emails are logged to console instead of being sent.
 
 ```env
 SMTP_HOST="smtp.gmail.com"
 SMTP_PORT=587
+SMTP_SECURE=false
 SMTP_USER="your-email@gmail.com"
-SMTP_PASSWORD="your-app-password"
-SMTP_FROM="Koordi <noreply@koordi.app>"
+SMTP_PASS="your-app-password"
+EMAIL_FROM="noreply@koordi.app"
+```
+
+**Implementation in `src/services/emailService.ts`:**
+```typescript
+if (process.env.SMTP_HOST) {
+  transporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: parseInt(process.env.SMTP_PORT || '587'),
+    secure: process.env.SMTP_SECURE === 'true',
+    auth: {
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS,
+    },
+  });
+}
 ```
 
 **Gmail Setup:**
 1. Enable 2-factor authentication
 2. Generate App Password: https://myaccount.google.com/apppasswords
-3. Use App Password as `SMTP_PASSWORD`
+3. Use App Password as `SMTP_PASS`
 
 **Alternative Services:**
-- SendGrid: `SMTP_HOST=smtp.sendgrid.net`, `SMTP_USER=apikey`, `SMTP_PASSWORD=<api_key>`
-- Mailgun: `SMTP_HOST=smtp.mailgun.org`, `SMTP_USER=<username>`, `SMTP_PASSWORD=<password>`
+- SendGrid: `SMTP_HOST=smtp.sendgrid.net`, `SMTP_USER=apikey`, `SMTP_PASS=<api_key>`
+- Mailgun: `SMTP_HOST=smtp.mailgun.org`, `SMTP_USER=<username>`, `SMTP_PASS=<password>`
 - AWS SES: `SMTP_HOST=email-smtp.us-east-1.amazonaws.com`, use IAM credentials
 
 ---
 
 ### Push Notifications (Mobile)
 
+**Status:** NOT IMPLEMENTED
+
+Push notifications are not currently implemented. The following configuration would be needed when implemented:
+
 #### Firebase Cloud Messaging (Android)
 
 ```env
 FIREBASE_SERVER_KEY="your-firebase-server-key"
 ```
-
-**Setup:**
-1. Create Firebase project: https://console.firebase.google.com
-2. Add Android app to project
-3. Download `google-services.json`
-4. Get Server Key from Project Settings > Cloud Messaging
 
 #### Apple Push Notification Service (iOS)
 
@@ -364,123 +357,76 @@ APNS_BUNDLE_ID="com.koordi.app"
 APNS_PRIVATE_KEY_PATH="./certs/apns-key.p8"
 ```
 
-**Setup:**
-1. Apple Developer Account: https://developer.apple.com
-2. Certificates, Identifiers & Profiles > Keys
-3. Create APNs Key (download .p8 file)
-4. Note Key ID and Team ID
-
 ---
 
 ### Analytics & Monitoring
 
-#### PostHog (Product Analytics)
+**Status:** NOT IMPLEMENTED
+
+Analytics and error tracking are not currently integrated. The following configuration would be needed when implemented:
 
 ```env
 POSTHOG_API_KEY="phc_abc123def456ghi789"
 POSTHOG_HOST="https://app.posthog.com"
-```
-
-**Setup:** Create account at https://posthog.com
-
-#### Sentry (Error Tracking)
-
-```env
 SENTRY_DSN="https://abc123@o456789.ingest.sentry.io/1234567"
 ```
-
-**Setup:** Create project at https://sentry.io
 
 ---
 
 ### Background Jobs
 
-```env
-ICS_SYNC_INTERVAL_HOURS=4
-TRAFFIC_CHECK_INTERVAL_MINUTES=60
-GOOGLE_TOKEN_REFRESH_INTERVAL_DAYS=7
-```
+Background job intervals are currently hardcoded in the scheduler, not configurable via environment variables.
 
-**Defaults:**
-- ICS sync: Every 4 hours per calendar
-- Traffic check: Every 60 minutes for events in next 48 hours
-- Google token refresh: Every 7 days
+**Actual Implementation (`src/jobs/scheduler.ts`):**
+- ICS sync: Every 15 minutes (hardcoded)
+- Invitation cleanup: Daily at 2 AM (hardcoded)
+
+**Not Implemented:**
+- Traffic check jobs
+- Google token refresh jobs (tokens refreshed on-demand during sync)
 
 ---
 
 ### Rate Limiting
 
-```env
-RATE_LIMIT_WINDOW_MS=900000  # 15 minutes
-RATE_LIMIT_MAX_AUTH=5        # 5 auth attempts per window
-RATE_LIMIT_MAX_API=100       # 100 API requests per window
+**Status:** PARTIALLY IMPLEMENTED
+
+Rate limiting is implemented for invitation routes only, with hardcoded values:
+
+```typescript
+// src/middleware/invitationRateLimiter.ts
+const invitationRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10, // limit each IP to 10 requests per windowMs
+  // ... skipped in test environment
+});
 ```
+
+There are no environment variables for rate limiting configuration.
 
 ---
 
 ### Logging
 
-```env
-LOG_LEVEL=info
-LOG_FORMAT=json
-```
+**Status:** NOT IMPLEMENTED
 
-**LOG_LEVEL Options:**
-- `error`: Only errors
-- `warn`: Warnings and errors
-- `info`: General info, warnings, errors (recommended production)
-- `debug`: Verbose debug logs (development only)
-
-**LOG_FORMAT Options:**
-- `json`: Structured JSON logs (recommended for production, log aggregation)
-- `pretty`: Human-readable colored logs (development)
+Structured logging with configurable levels is not implemented. The application uses `console.log/error/warn` directly with emoji prefixes for visibility.
 
 ---
 
 ### File Storage
 
-```env
-# Local Storage (Development)
-STORAGE_TYPE=local
-STORAGE_PATH=./uploads
+**Status:** NOT IMPLEMENTED
 
-# AWS S3 (Production)
-STORAGE_TYPE=s3
-AWS_REGION=us-east-1
-AWS_S3_BUCKET=koordi-uploads
-AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
-AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
-```
-
-**S3 Setup:**
-1. Create S3 bucket
-2. Create IAM user with S3 permissions
-3. Generate access keys
-4. Configure CORS on bucket:
-
-```json
-[
-  {
-    "AllowedHeaders": ["*"],
-    "AllowedMethods": ["GET", "PUT", "POST", "DELETE"],
-    "AllowedOrigins": ["https://koordi.app"],
-    "ExposeHeaders": ["ETag"]
-  }
-]
-```
+File upload/storage is not currently implemented.
 
 ---
 
 ### Feature Flags
 
-```env
-FEATURE_GOOGLE_CALENDAR_SYNC=true
-FEATURE_PUSH_NOTIFICATIONS=false
-FEATURE_EMAIL_INVITATIONS=true
-FEATURE_ANALYTICS=false
-```
+**Status:** NOT IMPLEMENTED
 
-Enable/disable features without code changes.
+Feature flags are not implemented. All features are controlled by code presence, not runtime configuration.
 
 ---
 
@@ -777,143 +723,118 @@ JWT_SECRET_ARN="arn:aws:secretsmanager:us-east-1:123456789:secret:koordi/jwt-sec
 
 ### 5. Validate Configuration at Startup
 
+**Status:** PARTIALLY IMPLEMENTED
+
+The only configuration validation at startup is for `ENCRYPTION_KEY`:
+
 ```typescript
-// src/config/validation.ts
-import Joi from 'joi';
-
-const configSchema = Joi.object({
-  NODE_ENV: Joi.string().valid('development', 'staging', 'production').required(),
-  PORT: Joi.number().port().default(3000),
-  DATABASE_URL: Joi.string().uri().required(),
-  JWT_SECRET: Joi.string().min(32).required(),
-  ENCRYPTION_KEY: Joi.string().length(64).hex().required(),
-  GOOGLE_CLIENT_ID: Joi.string().required(),
-  GOOGLE_CLIENT_SECRET: Joi.string().required(),
-  GOOGLE_REDIRECT_URI: Joi.string().uri().required(),
-  GOOGLE_MAPS_API_KEY: Joi.string().required(),
-  REDIS_URL: Joi.string().uri().required(),
-  // ... more validations
-});
-
-export function validateConfig() {
-  const { error } = configSchema.validate(process.env, {
-    abortEarly: false,
-    allowUnknown: true, // Allow extra env vars
-  });
-
-  if (error) {
-    const errors = error.details.map((d) => d.message).join('\n');
-    throw new Error(`Configuration validation failed:\n${errors}`);
+// src/utils/encryption.ts
+function validateEncryptionKey(): void {
+  if (!ENCRYPTION_KEY) {
+    console.error('CRITICAL: ENCRYPTION_KEY environment variable is not set');
+    return;
   }
+
+  if (ENCRYPTION_KEY.length !== 64) {
+    console.error(`CRITICAL: ENCRYPTION_KEY must be exactly 64 characters`);
+    return;
+  }
+
+  if (!/^[0-9a-fA-F]{64}$/.test(ENCRYPTION_KEY)) {
+    console.error('CRITICAL: ENCRYPTION_KEY must be a valid hexadecimal string');
+    return;
+  }
+
+  console.log('✓ ENCRYPTION_KEY validated successfully');
 }
+
+// Validated on module load
+validateEncryptionKey();
 ```
 
-**Usage:**
-```typescript
-// src/index.ts
-import { validateConfig } from './config/validation';
-
-validateConfig();
-
-// Start server
-app.listen(config.port);
-```
+**Not Implemented:**
+- Centralized Joi-based validation
+- Startup health checks for database, Redis, Google APIs
 
 ---
 
 ## CONFIGURATION VALIDATION
 
-### Startup Checks
+### Current Validation
+
+The application validates configuration minimally:
+
+1. **ENCRYPTION_KEY:** Validated at module load in `src/utils/encryption.ts`
+2. **Google OAuth:** Checked at runtime when creating OAuth client in `src/utils/googleCalendarClient.ts`
 
 ```typescript
-// src/config/healthcheck.ts
-
-export async function runStartupChecks() {
-  console.log('Running startup health checks...');
-
-  // 1. Database connection
-  try {
-    await prisma.$connect();
-    console.log('✅ Database connection successful');
-  } catch (error) {
-    console.error('❌ Database connection failed:', error);
-    process.exit(1);
-  }
-
-  // 2. Redis connection
-  try {
-    await redis.ping();
-    console.log('✅ Redis connection successful');
-  } catch (error) {
-    console.error('❌ Redis connection failed:', error);
-    process.exit(1);
-  }
-
-  // 3. Google OAuth credentials
-  try {
-    const oauth2Client = new google.auth.OAuth2(
-      config.google.clientId,
-      config.google.clientSecret,
-      config.google.redirectUri
-    );
-    console.log('✅ Google OAuth credentials configured');
-  } catch (error) {
-    console.error('❌ Google OAuth configuration failed:', error);
-    process.exit(1);
-  }
-
-  // 4. Google Maps API key
-  try {
-    const response = await fetch(
-      `https://maps.googleapis.com/maps/api/geocode/json?address=test&key=${config.google.mapsApiKey}`
-    );
-    if (response.ok) {
-      console.log('✅ Google Maps API key valid');
-    } else {
-      throw new Error('API key invalid');
-    }
-  } catch (error) {
-    console.error('❌ Google Maps API key failed:', error);
-    process.exit(1);
-  }
-
-  console.log('All startup checks passed ✅');
+// src/utils/googleCalendarClient.ts
+if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+  throw new ConfigurationError('Google OAuth credentials not configured', {
+    hasClientId: Boolean(process.env.GOOGLE_CLIENT_ID),
+    hasClientSecret: Boolean(process.env.GOOGLE_CLIENT_SECRET),
+  });
 }
 ```
+
+### Health Check Endpoint
+
+A basic health check endpoint is available:
+
+```typescript
+// src/index.ts
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    environment: process.env.NODE_ENV || 'development',
+  });
+});
+```
+
+**Note:** This endpoint does not verify database, Redis, or external API connectivity.
 
 ---
 
 ## SUMMARY CHECKLIST
 
 ### Initial Setup
-- [ ] Copy `.env.example` to `.env`
-- [ ] Set `NODE_ENV` to `development`
+- [ ] Copy `backend/.env.example` to `backend/.env`
+- [ ] Copy `frontend/.env.example` to `frontend/.env`
 - [ ] Configure `DATABASE_URL` (see [DATABASE_SETUP.md](./DATABASE_SETUP.md))
 - [ ] Generate `JWT_SECRET` (`openssl rand -base64 32`)
 - [ ] Generate `ENCRYPTION_KEY` (`openssl rand -hex 32`)
 - [ ] Create Google Cloud Project and enable APIs
 - [ ] Create OAuth 2.0 credentials → `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`
-- [ ] Create Google Maps API key → `GOOGLE_MAPS_API_KEY`
+- [ ] Set `GOOGLE_REDIRECT_URI` to match callback URL
+- [ ] Create Google Maps API key → `GOOGLE_MAPS_API_KEY` (backend), `VITE_GOOGLE_MAPS_API_KEY` (frontend)
 - [ ] Install and start Redis → `REDIS_URL`
-- [ ] Set `FRONTEND_URL` to React dev server
-- [ ] Run `npm install` to install dependencies
-- [ ] Run configuration validation (see above)
-- [ ] Run startup health checks (see above)
+- [ ] Set `FRONTEND_URL` to React dev server (e.g., `http://localhost:5173`)
+- [ ] Set `VITE_API_URL` in frontend to backend URL (e.g., `http://localhost:3000/api`)
+- [ ] Run `npm install` in both backend and frontend directories
 
-### Production Deployment
-- [ ] Store all secrets in secrets manager (AWS Secrets Manager, etc.)
-- [ ] Set `NODE_ENV=production`
-- [ ] Use production database with SSL (`sslmode=require`)
-- [ ] Use managed Redis (ElastiCache, Memorystore)
-- [ ] Configure production OAuth redirect URIs in Google Cloud Console
-- [ ] Restrict Google Maps API key to production domains
-- [ ] Enable rate limiting (`RATE_LIMIT_*` variables)
-- [ ] Configure CORS for production domains
-- [ ] Set up monitoring (Sentry, PostHog)
-- [ ] Enable logging to log aggregation service
-- [ ] Disable debug routes (`ENABLE_DEBUG_ROUTES=false`)
-- [ ] Configure SSL/TLS certificates (if self-hosted)
-- [ ] Set `TRUST_PROXY=true` if behind load balancer
+### Implemented Features
+- [x] Environment variable loading via `dotenv`
+- [x] ENCRYPTION_KEY validation at module load
+- [x] Google OAuth credential validation at runtime
+- [x] Basic health check endpoint (`/api/health`)
+- [x] CORS configuration via `FRONTEND_URL`
+- [x] WebSocket on same server as HTTP API
+- [x] Email (optional, via SMTP_* variables)
+- [x] Rate limiting for invitation routes (hardcoded values)
+
+### Not Yet Implemented
+- [ ] Centralized config object (variables accessed directly via `process.env`)
+- [ ] Joi-based configuration validation
+- [ ] Startup health checks (database, Redis, Google APIs)
+- [ ] Configurable background job intervals
+- [ ] Configurable rate limiting variables
+- [ ] Structured logging with configurable levels
+- [ ] File storage (local or S3)
+- [ ] Feature flags
+- [ ] Push notifications
+- [ ] Analytics/monitoring integration (Sentry, PostHog)
 
 ---
 

@@ -3,7 +3,7 @@
 
 **Purpose:** Complete specification for Google Calendar API integration
 **API Version:** Google Calendar API v3
-**Use Cases:** Sync assigned events to user's personal Google Calendar, bidirectional sync with Watch API
+**Use Cases:** Sync events to all calendar members' personal Google Calendars (one-way sync)
 
 ---
 
@@ -26,31 +26,35 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ User assigns event to themselves                            │
+│ ICS Sync runs (every 15 minutes)                            │
 └────────────────┬────────────────────────────────────────────┘
                  │
                  ▼
      ┌───────────────────────┐
-     │ Background Job:       │
-     │ Google Calendar Sync  │
+     │ For each event:       │
+     │ Sync to ALL members   │
      └───────────┬───────────┘
                  │
                  ▼
      ┌───────────────────────┐
-     │ Create Event in       │
-     │ User's Google Calendar│
+     │ Create/Update event   │
+     │ in each member's      │
+     │ Google Calendar       │
      └───────────┬───────────┘
                  │
                  ▼
      ┌───────────────────────┐
      │ Store google_event_id │
-     │ in Database           │
+     │ in UserGoogleEventSync│
+     │ (per-user tracking)   │
      └───────────┬───────────┘
                  │
                  ▼
      ┌───────────────────────┐
-     │ Create Supplemental   │
+     │ Sync Supplemental     │
      │ Events (Drive Times)  │
+     │ to assigned user +    │
+     │ opt-in members        │
      └───────────────────────┘
 ```
 
@@ -58,11 +62,32 @@
 
 | Action | Google Calendar Sync |
 |--------|---------------------|
-| **Event assigned to user** | Create event + supplemental events in user's calendar |
-| **Event reassigned to another user** | Delete from previous user's calendar, create in new user's calendar |
-| **Event unassigned** | Delete from user's calendar |
-| **Event time/location updated** | Update event in user's calendar |
-| **Event deleted** | Delete from user's calendar |
+| **ICS sync runs** | Create/update main events in ALL calendar members' Google Calendars |
+| **Event assigned to user** | Create supplemental events (drive times, buffer) for assignee |
+| **Event reassigned** | Delete supplemental events from previous assignee, create for new assignee |
+| **Event unassigned** | Delete supplemental events from user's calendar |
+| **ICS feed event updated** | Update events in all members' calendars who have sync enabled |
+| **Event deleted from ICS** | Delete from all members' calendars via `UserGoogleEventSync` tracking |
+| **Member joins calendar** | Sync all existing events to their Google Calendar (on next ICS sync) |
+| **Member removed** | Delete all synced events from their Google Calendar |
+| **User enables `keep_supplemental_events`** | Sync supplemental events from events assigned to OTHER users |
+| **User disables `keep_supplemental_events`** | Delete supplemental events from events assigned to OTHER users |
+
+### Multi-User Sync Model
+
+Events are synced independently to each user's Google Calendar via the `UserGoogleEventSync` junction table:
+
+```
+┌───────────────────┐     ┌──────────────────────┐     ┌─────────────────┐
+│      Event        │─────│  UserGoogleEventSync │─────│      User       │
+│   (Koordi DB)     │  M  │                      │  M  │ (Google Cal ID) │
+│                   │─────│  - google_event_id   │─────│                 │
+└───────────────────┘     │  - sync_type         │     └─────────────────┘
+                          └──────────────────────┘
+
+Each event can have multiple UserGoogleEventSync records,
+one for each user who has it synced to their calendar.
+```
 
 ---
 
@@ -70,25 +95,56 @@
 
 ### OAuth 2.0 Scopes
 
-The Google Calendar API requires the following OAuth scope:
+The Google Calendar API requires the following OAuth scopes:
 
 ```
 https://www.googleapis.com/auth/calendar
+https://www.googleapis.com/auth/calendar.events
 ```
 
-This scope grants full access to user's calendar (read/write). It is requested during initial OAuth flow (see [AUTHENTICATION.md](./AUTHENTICATION.md)).
+These scopes grant full access to user's calendars and events (read/write). They are requested during initial OAuth flow with `prompt: 'consent'` to ensure refresh tokens are always returned. See [AUTHENTICATION.md](./AUTHENTICATION.md).
 
 ### API Client Setup
 
 ```typescript
-// src/lib/google-calendar-client.ts
+// src/utils/googleCalendarClient.ts
 import { google } from 'googleapis';
-import { decrypt } from '../utils/encryption';
-import { PrismaClient } from '@prisma/client';
+import { decrypt, isEncryptionConfigured } from './encryption';
+import { prisma } from '../lib/prisma';
+import {
+  AuthenticationError,
+  ConfigurationError,
+  NotFoundError,
+  getErrorMessage,
+} from './errors';
 
-const prisma = new PrismaClient();
-
+/**
+ * Get an authenticated Google Calendar client for a user
+ * @throws {ConfigurationError} If encryption or OAuth is not configured
+ * @throws {NotFoundError} If user is not found
+ * @throws {AuthenticationError} If user doesn't have valid Google credentials
+ */
 export async function getGoogleCalendarClient(userId: string) {
+  // Check encryption configuration
+  if (!isEncryptionConfigured()) {
+    throw new ConfigurationError(
+      'Encryption is not properly configured. Cannot decrypt Google tokens.',
+      { userId }
+    );
+  }
+
+  // Validate OAuth configuration
+  if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+    throw new ConfigurationError(
+      'Google OAuth credentials not configured',
+      {
+        hasClientId: Boolean(process.env.GOOGLE_CLIENT_ID),
+        hasClientSecret: Boolean(process.env.GOOGLE_CLIENT_SECRET),
+      }
+    );
+  }
+
+  // Fetch user
   const user = await prisma.user.findUnique({
     where: { id: userId },
     select: {
@@ -97,10 +153,25 @@ export async function getGoogleCalendarClient(userId: string) {
     },
   });
 
-  if (!user || !user.google_calendar_sync_enabled || !user.google_refresh_token_enc) {
-    throw new Error('Google Calendar sync not enabled for user');
+  if (!user) {
+    throw new NotFoundError('User', userId);
   }
 
+  if (!user.google_calendar_sync_enabled) {
+    throw new AuthenticationError(
+      'Google Calendar sync is not enabled for this user',
+      { userId }
+    );
+  }
+
+  if (!user.google_refresh_token_enc) {
+    throw new AuthenticationError(
+      'User has not connected their Google Calendar account',
+      { userId }
+    );
+  }
+
+  // Decrypt and authenticate
   const oauth2Client = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
     process.env.GOOGLE_CLIENT_SECRET,
@@ -111,6 +182,29 @@ export async function getGoogleCalendarClient(userId: string) {
   oauth2Client.setCredentials({ refresh_token: refreshToken });
 
   return google.calendar({ version: 'v3', auth: oauth2Client });
+}
+
+/**
+ * Check if Google Calendar sync is enabled for a user
+ */
+export async function isGoogleCalendarSyncEnabled(userId: string): Promise<boolean> {
+  if (!isEncryptionConfigured()) {
+    return false;
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: {
+      google_calendar_sync_enabled: true,
+      google_refresh_token_enc: true,
+    },
+  });
+
+  return Boolean(
+    user &&
+      user.google_calendar_sync_enabled &&
+      user.google_refresh_token_enc
+  );
 }
 ```
 
@@ -167,20 +261,21 @@ export async function listUserCalendars(userId: string) {
 
 ## EVENT CRUD OPERATIONS
 
-### Create Event
+### Create/Update Main Event
 
-**Purpose:** Add assigned event to user's Google Calendar.
+**Purpose:** Sync main events to all calendar members' Google Calendars.
 
 **API Endpoint:**
 ```
-POST https://www.googleapis.com/calendar/v3/calendars/{calendarId}/events
+POST https://www.googleapis.com/calendar/v3/calendars/{calendarId}/events (create)
+PUT https://www.googleapis.com/calendar/v3/calendars/{calendarId}/events/{eventId} (update)
 ```
 
 **Request Body:**
 ```json
 {
   "summary": "Soccer Practice",
-  "description": "Child: Emma\nLocation: Lincoln Field",
+  "description": "Description here\n\nChild: Emma\nCalendar: Soccer Schedule",
   "location": "Lincoln Field, San Francisco, CA",
   "start": {
     "dateTime": "2024-03-20T16:00:00-07:00",
@@ -202,86 +297,139 @@ POST https://www.googleapis.com/calendar/v3/calendars/{calendarId}/events
 
 **Implementation:**
 ```typescript
-// src/services/google-calendar-sync-service.ts
-import { PrismaClient } from '@prisma/client';
-import { getGoogleCalendarClient } from '../lib/google-calendar-client';
-import logger from '../utils/logger';
+// src/services/mainEventGoogleCalendarSync.ts
+import { getGoogleCalendarClient, isGoogleCalendarSyncEnabled } from '../utils/googleCalendarClient';
+import { prisma } from '../lib/prisma';
+import { NotFoundError, ExternalAPIError, getErrorMessage } from '../utils/errors';
 
-const prisma = new PrismaClient();
+/**
+ * Context for batch-optimized sync operations
+ * Passing this context eliminates redundant database queries
+ */
+export interface SyncContext {
+  event?: any; // Event with event_calendar.child included
+  user?: any; // User with google_calendar_id, google_calendar_sync_enabled, google_refresh_token_enc
+  existingSync?: any; // UserGoogleEventSync record
+}
 
-export async function createGoogleCalendarEvent(eventId: string, userId: string) {
-  const event = await prisma.event.findUnique({
-    where: { id: eventId },
-    include: {
-      event_calendar: { include: { child: true } },
-    },
-  });
+/**
+ * Sync a main event to Google Calendar
+ * Handles both CREATE and UPDATE with stale record detection
+ */
+export async function syncMainEventToGoogleCalendar(
+  eventId: string,
+  userId: string,
+  context?: SyncContext
+): Promise<string | null> {
+  // Use context data if provided, otherwise fetch (backward compatibility)
+  let event = context?.event;
+  let user = context?.user;
+  let existingSync = context?.existingSync;
 
   if (!event) {
-    throw new Error('Event not found');
+    event = await prisma.event.findUnique({
+      where: { id: eventId },
+      include: {
+        event_calendar: { include: { child: true } },
+      },
+    });
+    if (!event) throw new NotFoundError('Event', eventId);
   }
 
-  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) {
+    user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        google_calendar_id: true,
+        google_calendar_sync_enabled: true,
+        google_refresh_token_enc: true,
+      },
+    });
+    if (!user || !user.google_calendar_sync_enabled || !user.google_refresh_token_enc) {
+      return null;
+    }
+  }
+
+  const calendarId = user?.google_calendar_id || 'primary';
   const calendar = await getGoogleCalendarClient(userId);
 
-  const googleEvent = await calendar.events.insert({
-    calendarId: user.google_calendar_id || 'primary',
-    requestBody: {
-      summary: event.title,
-      description: `${event.description || ''}\n\nChild: ${event.event_calendar.child.name}\nCalendar: ${event.event_calendar.name}`,
-      location: event.location || undefined,
-      start: event.is_all_day
-        ? { date: event.start_time.toISOString().split('T')[0] }
-        : {
-            dateTime: event.start_time.toISOString(),
-            timeZone: 'America/Los_Angeles', // TODO: Make timezone dynamic
-          },
-      end: event.is_all_day
-        ? { date: event.end_time.toISOString().split('T')[0] }
-        : {
-            dateTime: event.end_time.toISOString(),
-            timeZone: 'America/Los_Angeles',
-          },
-      colorId: mapCalendarColorToGoogle(event.event_calendar.color),
-      reminders: {
-        useDefault: false,
-        overrides: [
-          { method: 'popup', minutes: 30 },
-          { method: 'popup', minutes: 60 },
-        ],
-      },
+  // Format event for Google Calendar
+  const eventBody: any = {
+    summary: event.title,
+    description: `${event.description || ''}\n\nChild: ${event.event_calendar.child.name}\nCalendar: ${event.event_calendar.name}`,
+    location: event.location || undefined,
+    colorId: '9', // Blue color for main events
+    reminders: {
+      useDefault: false,
+      overrides: [{ method: 'popup', minutes: 30 }],
     },
-  });
-
-  // Store Google event ID
-  await prisma.event.update({
-    where: { id: eventId },
-    data: { google_event_id: googleEvent.data.id },
-  });
-
-  logger.info('Created event in Google Calendar', {
-    eventId,
-    googleEventId: googleEvent.data.id,
-    userId,
-  });
-
-  return googleEvent.data.id;
-}
-
-// Color mapping (Koordi hex color → Google Calendar color ID)
-function mapCalendarColorToGoogle(hexColor: string): string {
-  const colorMap: Record<string, string> = {
-    '#FF5733': '11', // Red
-    '#3B82F6': '9',  // Blue
-    '#10B981': '10', // Green
-    '#F59E0B': '5',  // Yellow/Orange
-    '#8B5CF6': '3',  // Purple
-    '#EC4899': '4',  // Pink
   };
 
-  return colorMap[hexColor] || '9'; // Default to blue
+  // Handle all-day events vs timed events
+  if (event.is_all_day) {
+    eventBody.start = { date: event.start_time.toISOString().split('T')[0] };
+    eventBody.end = { date: event.end_time.toISOString().split('T')[0] };
+  } else {
+    eventBody.start = {
+      dateTime: event.start_time.toISOString(),
+      timeZone: 'America/Los_Angeles',
+    };
+    eventBody.end = {
+      dateTime: event.end_time.toISOString(),
+      timeZone: 'America/Los_Angeles',
+    };
+  }
+
+  // Check if THIS USER already has this event synced
+  if (!existingSync) {
+    existingSync = await prisma.userGoogleEventSync.findUnique({
+      where: { user_id_event_id: { user_id: userId, event_id: eventId } },
+    });
+  }
+
+  if (existingSync && existingSync.google_event_id) {
+    // CRITICAL: Verify the Google Calendar event still exists before updating
+    try {
+      await calendar.events.get({
+        calendarId,
+        eventId: existingSync.google_event_id,
+      });
+
+      // Event exists, update it
+      await calendar.events.update({
+        calendarId,
+        eventId: existingSync.google_event_id,
+        requestBody: eventBody,
+      });
+      return existingSync.google_event_id;
+    } catch (error: any) {
+      if (error?.response?.status === 404) {
+        // Stale sync record - delete it and create new event
+        await prisma.userGoogleEventSync.delete({ where: { id: existingSync.id } });
+        existingSync = null;
+      } else {
+        throw error;
+      }
+    }
+  }
+
+  // CREATE new event
+  if (!existingSync) {
+    const response = await calendar.events.insert({
+      calendarId,
+      requestBody: eventBody,
+    });
+    return response.data.id!;
+  }
+
+  return null;
 }
 ```
+
+**Color Codes Used:**
+- Main events: `colorId: '9'` (Blue)
+- Buffer events: `colorId: '5'` (Yellow)
+- Drive time events: `colorId: '8'` (Gray)
 
 **Response:**
 ```json
@@ -294,65 +442,110 @@ function mapCalendarColorToGoogle(hexColor: string): string {
 }
 ```
 
-### Update Event
+### Multi-User Sync Service
 
-**Purpose:** Update event details when ICS feed changes or event is modified.
-
-**API Endpoint:**
-```
-PATCH https://www.googleapis.com/calendar/v3/calendars/{calendarId}/events/{eventId}
-```
+**Purpose:** Coordinate syncing events to ALL calendar members.
 
 **Implementation:**
 ```typescript
-export async function updateGoogleCalendarEvent(eventId: string, userId: string) {
+// src/services/multiUserSyncService.ts
+import { syncMainEventToGoogleCalendar, deleteMainEventFromGoogleCalendar } from './mainEventGoogleCalendarSync';
+import { prisma } from '../lib/prisma';
+
+/**
+ * Sync a main event to all calendar members
+ * Tracks each sync in the UserGoogleEventSync table
+ * Optimized to batch-fetch all user data to eliminate N+1 queries
+ */
+export async function syncMainEventToAllMembers(eventId: string): Promise<void> {
+  // Fetch event with calendar info and all members (single query)
   const event = await prisma.event.findUnique({
     where: { id: eventId },
     include: {
-      event_calendar: { include: { child: true } },
+      event_calendar: {
+        include: {
+          child: true,
+          members: {
+            where: { status: 'accepted' },
+            select: {
+              user_id: true,
+              user: {
+                select: {
+                  id: true,
+                  google_calendar_sync_enabled: true,
+                  google_refresh_token_enc: true,
+                  google_calendar_id: true,
+                },
+              },
+            },
+          },
+          owner: {
+            select: {
+              id: true,
+              google_calendar_sync_enabled: true,
+              google_refresh_token_enc: true,
+              google_calendar_id: true,
+            },
+          },
+        },
+      },
     },
   });
 
-  if (!event || !event.google_event_id) {
-    throw new Error('Event not found or not synced to Google Calendar');
+  if (!event) return;
+
+  // Build member list (owner + accepted members)
+  const userMap = new Map<string, any>();
+  const memberIds: string[] = [];
+
+  event.event_calendar.members.forEach((m) => {
+    if (m.user && m.user_id) {
+      userMap.set(m.user.id, m.user);
+      memberIds.push(m.user.id);
+    }
+  });
+
+  const owner = event.event_calendar.owner;
+  if (owner && !memberIds.includes(owner.id)) {
+    userMap.set(owner.id, owner);
+    memberIds.push(owner.id);
   }
 
-  const user = await prisma.user.findUnique({ where: { id: userId } });
-  const calendar = await getGoogleCalendarClient(userId);
-
-  await calendar.events.patch({
-    calendarId: user.google_calendar_id || 'primary',
-    eventId: event.google_event_id,
-    requestBody: {
-      summary: event.title,
-      description: `${event.description || ''}\n\nChild: ${event.event_calendar.child.name}`,
-      location: event.location || undefined,
-      start: event.is_all_day
-        ? { date: event.start_time.toISOString().split('T')[0] }
-        : {
-            dateTime: event.start_time.toISOString(),
-            timeZone: 'America/Los_Angeles',
-          },
-      end: event.is_all_day
-        ? { date: event.end_time.toISOString().split('T')[0] }
-        : {
-            dateTime: event.end_time.toISOString(),
-            timeZone: 'America/Los_Angeles',
-          },
-    },
+  // Batch-fetch existing sync records
+  const existingSyncs = await prisma.userGoogleEventSync.findMany({
+    where: { event_id: eventId, sync_type: 'main', user_id: { in: memberIds } },
   });
+  const existingSyncMap = new Map(existingSyncs.map((s) => [s.user_id, s]));
 
-  logger.info('Updated event in Google Calendar', {
-    eventId,
-    googleEventId: event.google_event_id,
-    userId,
-  });
+  // Sync to each member in parallel
+  await Promise.all(
+    memberIds.map(async (userId) => {
+      const user = userMap.get(userId);
+      if (!user || !user.google_calendar_sync_enabled || !user.google_refresh_token_enc) {
+        return; // Skip users without sync enabled
+      }
+
+      const googleEventId = await syncMainEventToGoogleCalendar(
+        eventId,
+        userId,
+        { event, user, existingSync: existingSyncMap.get(userId) }
+      );
+
+      if (googleEventId) {
+        await prisma.userGoogleEventSync.upsert({
+          where: { user_id_event_id: { user_id: userId, event_id: eventId } },
+          create: { user_id: userId, event_id: eventId, google_event_id: googleEventId, sync_type: 'main' },
+          update: { google_event_id: googleEventId },
+        });
+      }
+    })
+  );
 }
 ```
 
 ### Delete Event
 
-**Purpose:** Remove event from Google Calendar when unassigned or deleted.
+**Purpose:** Remove event from a user's Google Calendar when unassigned or event is deleted.
 
 **API Endpoint:**
 ```
@@ -361,38 +554,54 @@ DELETE https://www.googleapis.com/calendar/v3/calendars/{calendarId}/events/{eve
 
 **Implementation:**
 ```typescript
-export async function deleteGoogleCalendarEvent(eventId: string, userId: string) {
-  const event = await prisma.event.findUnique({
-    where: { id: eventId },
-    select: { google_event_id: true },
+// src/services/mainEventGoogleCalendarSync.ts
+export async function deleteMainEventFromGoogleCalendar(
+  eventId: string,
+  userId: string
+): Promise<void> {
+  const syncEnabled = await isGoogleCalendarSyncEnabled(userId);
+  if (!syncEnabled) return;
+
+  // Look up the user's specific sync record (NOT the event's google_event_id)
+  const existingSync = await prisma.userGoogleEventSync.findUnique({
+    where: {
+      user_id_event_id: { user_id: userId, event_id: eventId },
+    },
   });
 
-  if (!event || !event.google_event_id) {
-    logger.warn('Event not found or not synced to Google Calendar', { eventId });
+  if (!existingSync || !existingSync.google_event_id) {
+    // This user doesn't have this event synced
     return;
   }
 
-  const user = await prisma.user.findUnique({ where: { id: userId } });
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { google_calendar_id: true },
+  });
+
+  const calendarId = user?.google_calendar_id || 'primary';
   const calendar = await getGoogleCalendarClient(userId);
 
-  try {
-    await calendar.events.delete({
-      calendarId: user.google_calendar_id || 'primary',
-      eventId: event.google_event_id,
-    });
+  await calendar.events.delete({
+    calendarId,
+    eventId: existingSync.google_event_id,
+  });
+}
 
-    logger.info('Deleted event from Google Calendar', {
-      eventId,
-      googleEventId: event.google_event_id,
-      userId,
-    });
-  } catch (error) {
-    if (error.code === 404) {
-      logger.warn('Event already deleted from Google Calendar', { eventId });
-    } else {
-      throw error;
-    }
-  }
+/**
+ * Delete a main event from ALL calendar members' Google Calendars
+ */
+export async function deleteMainEventFromAllMembers(eventId: string): Promise<void> {
+  const syncs = await prisma.userGoogleEventSync.findMany({
+    where: { event_id: eventId, sync_type: 'main' },
+  });
+
+  await Promise.all(
+    syncs.map(async (sync) => {
+      await deleteMainEventFromGoogleCalendar(eventId, sync.user_id);
+      await prisma.userGoogleEventSync.delete({ where: { id: sync.id } });
+    })
+  );
 }
 ```
 
@@ -508,37 +717,43 @@ This adds significant complexity and may be deferred to post-MVP.
 
 ## SYNC STRATEGY
 
-### One-Way Sync (MVP)
+### One-Way Sync (Current Implementation)
 
 **Direction:** Koordi → Google Calendar
 
-**Trigger:** Event assignment changes
+**Trigger:** ICS sync job (every 15 minutes) or event operations
 
 **Flow:**
-1. User assigns event to themselves
-2. Background job creates event in Google Calendar
-3. Store `google_event_id` in database
-4. Future updates/deletes use this ID
+1. ICS sync job fetches and parses ICS feeds
+2. For each event, `syncMainEventToAllMembers()` is called
+3. Each member with sync enabled gets the event in their Google Calendar
+4. `UserGoogleEventSync` records track each user's Google Event ID
+5. Supplemental events sync to assigned user + opt-in members
+
+**Key Implementation Details:**
+- Main events sync to ALL calendar members (owner + accepted members)
+- Supplemental events only sync to assigned user by default
+- Other members opt-in to supplemental events via `keep_supplemental_events` toggle
+- Stale sync records are detected and cleaned up automatically
+- Partial failures don't break the entire sync operation
 
 **Advantages:**
 - Simpler implementation
 - No conflict resolution needed
 - Clear source of truth (ICS feed)
+- Multi-user support with independent tracking
 
-### Bidirectional Sync (Future Enhancement)
+### Bidirectional Sync (Not Implemented)
 
 **Direction:** Koordi ↔ Google Calendar
 
-**Challenges:**
-- Conflict resolution (ICS feed update vs. Google Calendar edit)
-- Watch API management (expiration, renewal)
-- Sync loop prevention
-- Handling deletions
+**Status:** Not yet implemented. May be considered for future enhancement.
 
-**Recommended Approach:**
-- ICS feed is always the source of truth for event existence
-- Google Calendar edits only update time/location/notes
-- If event is modified in Google Calendar AND ICS feed updates, ICS feed wins
+**Would Require:**
+- Watch API setup and management
+- Conflict resolution logic (ICS feed vs. Google Calendar edit)
+- Sync loop prevention
+- Handling deletions from both sources
 
 ---
 
@@ -772,37 +987,42 @@ describe('Google Calendar Integration', () => {
 ## SUMMARY CHECKLIST
 
 ### Setup
-- [ ] Google Calendar API enabled in Google Cloud Console
-- [ ] OAuth scope `https://www.googleapis.com/auth/calendar` requested
-- [ ] Refresh tokens stored encrypted in database
-- [ ] API client helper functions created
+- [x] Google Calendar API enabled in Google Cloud Console
+- [x] OAuth scopes `calendar` and `calendar.events` requested
+- [x] Refresh tokens stored encrypted in database (AES-256-CBC)
+- [x] API client helper functions (`src/utils/googleCalendarClient.ts`)
+- [x] Custom error types (ConfigurationError, AuthenticationError, NotFoundError)
 
 ### Event Operations
-- [ ] Create event implementation
-- [ ] Update event implementation
-- [ ] Delete event implementation
-- [ ] Supplemental events (drive times) synced
-- [ ] Color mapping from Koordi to Google Calendar
-- [ ] Timezone handling (dynamic based on user location)
+- [x] Create/update main event implementation (`syncMainEventToGoogleCalendar`)
+- [x] Delete event implementation (`deleteMainEventFromGoogleCalendar`)
+- [x] Multi-user sync (`syncMainEventToAllMembers`)
+- [x] Supplemental events (drive times, buffer) synced
+- [x] Fixed color codes (Blue=9 for main, Yellow=5 for buffer, Gray=8 for drive)
+- [ ] Timezone handling (currently hardcoded to `America/Los_Angeles`)
 
 ### Error Handling
-- [ ] 401 (token expired) → Disable sync, notify user
-- [ ] 403 (permissions) → Log error
-- [ ] 404 (not found) → Log warning, continue
-- [ ] 429 (quota exceeded) → Exponential backoff
-- [ ] 500+ (server error) → Retry with backoff
+- [x] 401 (token expired) → Throws AuthenticationError
+- [x] 404 (not found) → Detects stale sync records, cleans up and recreates
+- [x] Custom error types with context (ExternalAPIError)
+- [ ] 403 (permissions) → Not explicitly handled
+- [ ] 429 (quota exceeded) → Not implemented
+- [ ] Automatic user notification on token expiry
 
 ### Sync Strategy
-- [ ] One-way sync (Koordi → Google Calendar)
-- [ ] Triggered by event assignment changes
-- [ ] Background job implementation (see BACKGROUND_JOBS.md)
-- [ ] Idempotent operations (safe to retry)
+- [x] One-way sync (Koordi → Google Calendar)
+- [x] Triggered by ICS sync job (every 15 minutes)
+- [x] Per-user tracking via `UserGoogleEventSync` table
+- [x] Stale record detection and cleanup
+- [x] Batch-optimized queries to eliminate N+1
+- [x] Parallel sync operations with partial failure handling
 
-### Quota Management
-- [ ] Exponential backoff for rate limits
-- [ ] API call monitoring with Prometheus
-- [ ] Conditional updates (only if event changed)
-- [ ] Usage alerts configured
+### Multi-User Features
+- [x] Main events sync to ALL calendar members
+- [x] Supplemental events sync to assigned user
+- [x] Opt-in supplemental events for other members (`keep_supplemental_events`)
+- [x] Handle member join/leave (sync/delete events)
+- [x] Handle retention toggle change
 
 ### Testing
 - [ ] Unit tests for all CRUD operations
@@ -810,12 +1030,12 @@ describe('Google Calendar Integration', () => {
 - [ ] Error scenario tests
 - [ ] Integration tests with real Google account (manual)
 
-### Future Enhancements (Post-MVP)
+### Not Yet Implemented
 - [ ] Watch API for bidirectional sync
-- [ ] Conflict resolution for bidirectional sync
-- [ ] User-selectable calendar (not just primary)
-- [ ] Batch operations for bulk sync
-- [ ] Custom event colors per calendar
+- [ ] User-selectable calendar (currently uses `primary`)
+- [ ] Dynamic timezone handling
+- [ ] Quota management with exponential backoff
+- [ ] Prometheus metrics for API call monitoring
 
 ---
 

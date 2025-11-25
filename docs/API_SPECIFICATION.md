@@ -116,29 +116,24 @@ List endpoints support pagination:
 
 ## AUTHENTICATION & USER ENDPOINTS
 
-### POST /api/auth/google/initiate
+### GET /api/auth/google
 
 Initiate Google OAuth flow.
 
 **Authentication:** None (public endpoint)
 
-**Request Body:**
-```json
-{
-  "invitation_token": "optional-invitation-uuid"
-}
-```
+**Request Body:** None
 
 **Response:** `200 OK`
 ```json
 {
-  "auth_url": "https://accounts.google.com/o/oauth2/v2/auth?...",
-  "state": "csrf-token-uuid"
+  "url": "https://accounts.google.com/o/oauth2/v2/auth?..."
 }
 ```
 
-**Errors:**
-- `400` - Invalid invitation token
+**Notes:**
+- Uses `prompt='consent'` to ensure refresh token is always returned
+- Required scopes: userinfo.email, userinfo.profile, calendar, calendar.events
 
 ---
 
@@ -152,28 +147,20 @@ OAuth callback endpoint.
 - `code` (required) - OAuth authorization code
 - `state` (required) - CSRF token from initiate
 
-**Response:** `200 OK`
-```json
-{
-  "token": "jwt-token",
-  "user": {
-    "id": "user-uuid",
-    "email": "user@example.com",
-    "name": "John Doe",
-    "profile_photo_url": "https://...",
-    "created_at": "2024-01-01T00:00:00Z"
-  },
-  "is_new_user": true
-}
-```
+**Response:** `302 Redirect`
 
-**Errors:**
-- `400` - Invalid code or state
-- `403` - CSRF validation failed
+Redirects to frontend with token in URL:
+- Success: `{FRONTEND_URL}/auth/callback?token={jwt}&needs_setup=true` (if home address not set)
+- Error: `{FRONTEND_URL}/auth/error?message={error_message}`
+
+**Notes:**
+- Auto-accepts any pending invitations for the user's email
+- Checks if user needs setup (home address required)
+- Sets `needs_setup=true` URL param if home address is missing
 
 ---
 
-### GET /api/users/me
+### GET /api/auth/me
 
 Get current user profile and settings.
 
@@ -185,18 +172,18 @@ Get current user profile and settings.
   "id": "user-uuid",
   "email": "user@example.com",
   "name": "John Doe",
-  "profile_photo_url": "https://...",
+  "avatar_url": "https://...",
   "google_calendar_id": "primary",
-  "default_home_address": "123 Main St, City, State 12345",
-  "default_home_latitude": 37.7749,
-  "default_home_longitude": -122.4194,
+  "home_address": "123 Main St, City, State 12345",
   "comfort_buffer_minutes": 5,
-  "use_comfort_buffer": false,
-  "supplemental_event_retention_on_reassign": false,
+  "keep_supplemental_events": false,
   "created_at": "2024-01-01T00:00:00Z",
   "updated_at": "2024-01-01T00:00:00Z"
 }
 ```
+
+**Notes:**
+- Sensitive data (google_refresh_token_enc, home_latitude, home_longitude) excluded from response
 
 ---
 
@@ -210,32 +197,24 @@ Update user profile.
 ```json
 {
   "name": "John Doe",
-  "profile_photo_url": "https://..."
+  "avatar_url": "https://..."
 }
 ```
 
 **Response:** `200 OK`
-```json
-{
-  "id": "user-uuid",
-  "name": "John Doe",
-  "profile_photo_url": "https://...",
-  "updated_at": "2024-01-01T00:00:00Z"
-}
-```
+Returns updated user object (same format as GET /api/auth/me)
 
 ---
 
 ### PATCH /api/users/me/settings/address
 
-Update default home address.
+Update home address.
 
 **Authentication:** Required
 
 **Request Body:**
 ```json
 {
-  "place_id": "ChIJ...",
   "address": "123 Main St, City, State 12345",
   "latitude": 37.7749,
   "longitude": -122.4194
@@ -243,48 +222,34 @@ Update default home address.
 ```
 
 **Response:** `200 OK`
-```json
-{
-  "default_home_address": "123 Main St, City, State 12345",
-  "default_home_latitude": 37.7749,
-  "default_home_longitude": -122.4194,
-  "updated_at": "2024-01-01T00:00:00Z"
-}
-```
+Returns updated user object (same format as GET /api/auth/me)
 
 **Errors:**
-- `400` - Invalid place_id or address
+- `400` - Address is required
 
 ---
 
 ### PATCH /api/users/me/settings/comfort-buffer
 
-Update comfort buffer settings.
+Update comfort buffer setting.
 
 **Authentication:** Required
 
 **Request Body:**
 ```json
 {
-  "use_comfort_buffer": true,
   "comfort_buffer_minutes": 5
 }
 ```
 
 **Validation:**
-- `comfort_buffer_minutes`: 0-60, increments of 5
+- `comfort_buffer_minutes`: 0-60
 
 **Response:** `200 OK`
-```json
-{
-  "use_comfort_buffer": true,
-  "comfort_buffer_minutes": 5,
-  "updated_at": "2024-01-01T00:00:00Z"
-}
-```
+Returns updated user object (same format as GET /api/auth/me)
 
 **Errors:**
-- `422` - Invalid comfort_buffer_minutes value
+- `400` - Comfort buffer must be between 0 and 60 minutes
 
 ---
 
@@ -297,43 +262,43 @@ Update supplemental event retention setting.
 **Request Body:**
 ```json
 {
-  "supplemental_event_retention_on_reassign": true
+  "keep_supplemental_events": true
 }
 ```
 
 **Response:** `200 OK`
-```json
-{
-  "supplemental_event_retention_on_reassign": true,
-  "updated_at": "2024-01-01T00:00:00Z"
-}
-```
+Returns updated user object (same format as GET /api/auth/me)
+
+**Notes:**
+- Triggers retroactive sync/unsync of all supplemental events in background
+- When enabled: syncs supplemental events for non-assigned events to Google Calendar
+- When disabled: removes supplemental events for non-assigned events from Google Calendar
+
+**Errors:**
+- `400` - keep_supplemental_events must be a boolean
 
 ---
 
 ### DELETE /api/users/me
 
-Delete user account (requires confirmation).
+Delete user account.
 
 **Authentication:** Required
 
-**Request Body:**
+**Request Body:** None
+
+**Response:** `200 OK`
 ```json
 {
-  "confirmation": "DELETE"
+  "message": "Account deleted successfully"
 }
 ```
-
-**Response:** `204 No Content`
-
-**Errors:**
-- `400` - Invalid confirmation
 
 ---
 
 ## EVENT CALENDAR ENDPOINTS
 
-### POST /api/event-calendars/validate-ics
+### POST /api/calendars/validate-ics
 
 Validate ICS feed URL before creating calendar.
 
@@ -360,13 +325,12 @@ Validate ICS feed URL before creating calendar.
 ```
 
 **Errors:**
-- `400` - Invalid URL format
-- `400` - ICS feed unreachable
-- `400` - Invalid calendar format
+- `400` - ics_url is required
+- `500` - Failed to validate ICS feed
 
 ---
 
-### POST /api/event-calendars
+### POST /api/calendars
 
 Create new Event Calendar.
 
@@ -383,9 +347,9 @@ Create new Event Calendar.
 ```
 
 **Validation:**
-- `name`: Required, 1-100 chars
+- `name`: Required
 - `ics_url`: Required, valid URL, must return valid ICS
-- `child_id`: Required, user must have access to child
+- `child_id`: Required
 - `color`: Optional, hex color
 
 **Response:** `201 Created`
@@ -399,97 +363,55 @@ Create new Event Calendar.
   "color": "#FF5733",
   "sync_enabled": true,
   "last_sync_status": "pending",
-  "created_at": "2024-01-01T00:00:00Z"
+  "created_at": "2024-01-01T00:00:00Z",
+  "initialSync": {
+    "eventsAdded": 24,
+    "eventsUpdated": 0,
+    "eventsDeleted": 0
+  }
 }
 ```
 
+**Notes:**
+- Initial ICS sync is performed synchronously (up to 90 second timeout)
+- If sync fails, calendar is automatically deleted and error returned
+- Events are synced to owner's Google Calendar during creation
+
 **Errors:**
-- `400` - Invalid ICS URL
-- `404` - Child not found
-- `409` - Duplicate ICS URL for this child
+- `400` - Missing required fields: name, ics_url, child_id
+- `500` - Failed to sync calendar events
 
 ---
 
-### GET /api/event-calendars
+### GET /api/calendars
 
-List all Event Calendars where user is a member.
+List all Event Calendars where user is owner or member.
 
 **Authentication:** Required
 
-**Query Parameters:**
-- `child_id` (optional) - Filter by child
+**Query Parameters:** None
 
 **Response:** `200 OK`
-```json
-{
-  "data": [
-    {
-      "id": "calendar-uuid",
-      "name": "Soccer - Spring 2024",
-      "child": {
-        "id": "child-uuid",
-        "name": "Emma",
-        "photo_url": "https://..."
-      },
-      "owner_id": "user-uuid",
-      "is_owner": true,
-      "color": "#FF5733",
-      "sync_enabled": true,
-      "last_synced_at": "2024-01-01T12:00:00Z",
-      "last_sync_status": "success",
-      "event_count_upcoming": 12,
-      "member_count": 2,
-      "created_at": "2024-01-01T00:00:00Z"
-    }
-  ]
-}
-```
+Returns array of calendars (format depends on service implementation)
 
 ---
 
-### GET /api/event-calendars/:id
+### GET /api/calendars/:id
 
 Get Event Calendar details.
 
 **Authentication:** Required
-**Authorization:** User must be a member of this Event Calendar
+**Authorization:** User must be owner or member
 
 **Response:** `200 OK`
-```json
-{
-  "id": "calendar-uuid",
-  "name": "Soccer - Spring 2024",
-  "ics_url": "https://example.com/calendar.ics",
-  "child": {
-    "id": "child-uuid",
-    "name": "Emma",
-    "photo_url": "https://..."
-  },
-  "owner": {
-    "id": "user-uuid",
-    "name": "John Doe",
-    "email": "john@example.com"
-  },
-  "is_owner": true,
-  "color": "#FF5733",
-  "sync_enabled": true,
-  "last_synced_at": "2024-01-01T12:00:00Z",
-  "last_sync_status": "success",
-  "last_sync_error": null,
-  "event_count_total": 48,
-  "event_count_upcoming": 12,
-  "created_at": "2024-01-01T00:00:00Z",
-  "updated_at": "2024-01-01T00:00:00Z"
-}
-```
+Returns calendar object (format depends on service implementation)
 
 **Errors:**
 - `404` - Calendar not found
-- `403` - User not a member
 
 ---
 
-### PATCH /api/event-calendars/:id
+### PATCH /api/calendars/:id
 
 Update Event Calendar.
 
@@ -500,101 +422,92 @@ Update Event Calendar.
 ```json
 {
   "name": "Soccer - Updated Name",
-  "color": "#00FF00"
+  "ics_url": "https://example.com/updated.ics",
+  "color": "#00FF00",
+  "sync_enabled": true
 }
 ```
-
-**Note:** ICS URL cannot be changed after creation
 
 **Response:** `200 OK`
-```json
-{
-  "id": "calendar-uuid",
-  "name": "Soccer - Updated Name",
-  "color": "#00FF00",
-  "updated_at": "2024-01-01T00:00:00Z"
-}
-```
+Returns updated calendar object
 
 **Errors:**
-- `404` - Calendar not found
-- `403` - User not owner
+- `404` - Calendar not found or not the owner
 
 ---
 
-### DELETE /api/event-calendars/:id
+### DELETE /api/calendars/:id
 
-Delete Event Calendar (high friction - owner only).
+Delete Event Calendar (owner only, must remove all members first).
 
 **Authentication:** Required
 **Authorization:** User must be owner
 
-**Request Body:**
-```json
-{
-  "confirmation": "DELETE"
-}
-```
-
-**Response:** `204 No Content`
-
-**Side Effects:**
-- All events deleted from all members' Google Calendars
-- All members removed
-- Child remains (not deleted)
-
-**Errors:**
-- `404` - Calendar not found
-- `403` - User not owner
-- `400` - Invalid confirmation
-
----
-
-### POST /api/event-calendars/:id/sync
-
-Manually trigger sync (for immediate refresh).
-
-**Authentication:** Required
-**Authorization:** User must be a member
-
-**Response:** `202 Accepted`
-```json
-{
-  "message": "Sync job queued",
-  "job_id": "job-uuid"
-}
-```
-
----
-
-### GET /api/event-calendars/:id/sync-status
-
-Get current sync status.
-
-**Authentication:** Required
-**Authorization:** User must be a member
+**Request Body:** None
 
 **Response:** `200 OK`
 ```json
 {
-  "calendar_id": "calendar-uuid",
-  "last_synced_at": "2024-01-01T12:00:00Z",
-  "last_sync_status": "success",
-  "last_sync_error": null,
-  "sync_in_progress": false
+  "message": "Calendar deleted successfully"
 }
 ```
+
+**Preconditions:**
+- Calendar must have no accepted members (only owner remains)
+- Remove all members before deleting calendar
+
+**Errors:**
+- `400` - Cannot delete calendar with multiple members
+- `404` - Calendar not found or not the owner
+
+---
+
+### POST /api/calendars/:id/sync
+
+Manually trigger ICS sync.
+
+**Authentication:** Required
+**Authorization:** User must be owner or member
+
+**Response:** `200 OK`
+```json
+{
+  "message": "Sync completed",
+  "created": 5,
+  "updated": 2,
+  "deleted": 1
+}
+```
+
+**Notes:**
+- Syncs ICS feed to database AND Google Calendar for all members
+- Runs synchronously (may take time for large calendars)
+
+**Errors:**
+- `404` - Calendar not found
+- `500` - Failed to sync calendar
 
 ---
 
 ## EVENT CALENDAR MEMBER ENDPOINTS
 
-### POST /api/event-calendars/:id/invitations
+### GET /api/family-members
 
-Invite parent members to Event Calendar.
+Get all family members (users who share any calendar with current user).
 
 **Authentication:** Required
-**Authorization:** Any member can invite
+
+**Response:** `200 OK`
+Returns array of users with their calendar associations
+
+---
+
+### POST /api/event-calendars/:calendarId/invitations
+
+Send invitation to join an Event Calendar.
+
+**Authentication:** Required
+**Authorization:** Owner only
 **Rate Limit:** 10 invitations per calendar per hour
 
 **Request Body:**
@@ -607,43 +520,32 @@ Invite parent members to Event Calendar.
 **Validation:**
 - Max 10 members per Event Calendar
 - Email must be valid format
-- Cannot invite owner's email
 - Cannot invite existing members
-- Rate limited to 10 invitations per calendar per hour
 
 **Response:** `201 Created`
-```json
-{
-  "id": "invitation-uuid",
-  "event_calendar_id": "calendar-uuid",
-  "invited_email": "jane@example.com",
-  "status": "pending",
-  "invited_at": "2024-01-01T00:00:00Z",
-  "expires_at": "2024-01-31T00:00:00Z",
-  "invitation_token": "secure-token-uuid"
-}
-```
+Returns membership/invitation object
 
 **Behavior:**
-- If invited email belongs to existing user: status = "accepted" (auto-accepted)
-- If invited email is new: status = "pending", invitation email sent
-- Invitations automatically expire after 30 days
+- If invited email belongs to existing user: status = "accepted" (auto-added directly)
+- If invited email is new user: status = "pending", invitation email sent
+- Invitations expire after 30 days
+- When existing user is added, their Google Calendar is immediately synced
 
 **Errors:**
-- `400` - Invalid email format
-- `409` - User already member or invited
-- `422` - Max members exceeded (10)
-- `429` - Rate limit exceeded (10 invitations/hour per calendar)
+- `400` - Email is required / Invalid email format
+- `400` - This email already has a pending invitation
+- `400` - This email is already a member
+- `400` - Maximum 10 members per calendar
+- `400` - Only the calendar owner can send invitations
 
 ---
 
-### POST /api/event-calendars/:id/invitations/bulk
+### POST /api/event-calendars/:calendarId/invitations/bulk
 
 Send bulk invitations from a CSV file.
 
 **Authentication:** Required
-**Authorization:** Any member can invite
-**Rate Limit:** Applies to total invitations sent (10/hour per calendar)
+**Authorization:** Owner only
 
 **Request:**
 - Content-Type: `multipart/form-data`
@@ -663,36 +565,20 @@ dave@example.com
 **Response:** `200 OK`
 ```json
 {
-  "summary": {
-    "total_emails": 4,
-    "valid_emails": 4,
-    "invalid_emails": 0,
-    "success_count": 3,
-    "failed_count": 1
-  },
+  "total": 4,
+  "valid": 4,
+  "invalid": 0,
+  "success": 3,
+  "failed": 1,
   "results": [
     {
       "email": "alice@example.com",
-      "success": true,
-      "invitation_id": "invitation-uuid",
-      "status": "pending"
-    },
-    {
-      "email": "bob@example.com",
-      "success": true,
-      "invitation_id": "invitation-uuid",
-      "status": "accepted"
-    },
-    {
-      "email": "charlie@example.com",
-      "success": true,
-      "invitation_id": "invitation-uuid",
-      "status": "pending"
+      "success": true
     },
     {
       "email": "dave@example.com",
       "success": false,
-      "error": "User already member or invited"
+      "error": "This email is already a member"
     }
   ]
 }
@@ -705,58 +591,75 @@ dave@example.com
 - Same restrictions as single invitation endpoint apply per email
 
 **Errors:**
-- `400` - No file uploaded or invalid CSV format
-- `400` - No valid email addresses found in CSV
-- `413` - File size exceeds 1 MB limit
+- `400` - CSV file is required
+- `400` - No email addresses found in CSV file
+- `400` - Only CSV files are allowed
 
 ---
 
-### GET /api/event-calendars/:id/members
+### GET /api/event-calendars/:calendarId/members
 
-List all members of Event Calendar with invitation analytics.
+List all members and pending invitations for an Event Calendar.
 
 **Authentication:** Required
-**Authorization:** User must be a member
+**Authorization:** User must be owner or member
 
 **Response:** `200 OK`
 ```json
 {
+  "owner": {
+    "id": "user-uuid",
+    "name": "John Doe",
+    "email": "john@example.com",
+    "avatar_url": "https://..."
+  },
   "members": [
     {
+      "id": "membership-uuid",
       "user_id": "user-uuid",
-      "name": "John Doe",
-      "email": "john@example.com",
-      "profile_photo_url": "https://...",
-      "is_owner": true,
-      "joined_at": "2024-01-01T00:00:00Z"
-    }
-  ],
-  "pending_invitations": [
-    {
-      "id": "invitation-uuid",
-      "email": "jane@example.com",
-      "invited_by": "John Doe",
-      "status": "pending",
-      "expires_at": "2024-01-31T00:00:00Z",
-      "created_at": "2024-01-01T00:00:00Z"
+      "invited_email": "jane@example.com",
+      "status": "accepted",
+      "invited_at": "2024-01-01T00:00:00Z",
+      "responded_at": "2024-01-02T00:00:00Z",
+      "user": {
+        "id": "user-uuid",
+        "name": "Jane Doe",
+        "email": "jane@example.com",
+        "avatar_url": "https://..."
+      },
+      "invited_by": {
+        "name": "John Doe",
+        "email": "john@example.com"
+      }
     }
   ],
   "analytics": {
-    "total_invitations": 10,
-    "accepted": 5,
-    "declined": 2,
-    "pending": 2,
-    "expired": 1
+    "total": 5,
+    "accepted": 3,
+    "declined": 1,
+    "pending": 1,
+    "expired": 0
   }
 }
 ```
 
 **Analytics Explanation:**
-- `total_invitations`: All invitations ever sent (all statuses)
-- `accepted`: Invitations that resulted in active members
+- `total`: All memberships/invitations for this calendar
+- `accepted`: Active members
 - `declined`: Explicitly declined invitations
 - `pending`: Active pending invitations (not expired)
 - `expired`: Invitations that expired without response
+
+---
+
+### GET /api/invitations/pending
+
+Get current user's pending invitations.
+
+**Authentication:** Required
+
+**Response:** `200 OK`
+Returns array of pending invitations for the user's email
 
 ---
 
@@ -769,28 +672,17 @@ Accept invitation to Event Calendar.
 **Request Body:** None
 
 **Response:** `200 OK`
-```json
-{
-  "event_calendar": {
-    "id": "calendar-uuid",
-    "name": "Soccer - Spring 2024",
-    "child": {
-      "id": "child-uuid",
-      "name": "Emma"
-    }
-  },
-  "membership": {
-    "user_id": "user-uuid",
-    "joined_at": "2024-01-01T00:00:00Z"
-  }
-}
-```
+Returns updated membership object with event_calendar details
+
+**Side Effects:**
+- All existing calendar events are synced to the new member's Google Calendar
+- Sync runs synchronously (up to 90 second timeout)
 
 **Errors:**
-- `404` - Invalid token or invitation not found
-- `400` - Invitation has expired (>30 days old)
-- `409` - Already accepted
-- `403` - Email mismatch (must sign in with invited email)
+- `400` - Invitation not found
+- `400` - Invitation already accepted/declined
+- `400` - This invitation has expired
+- `400` - This invitation was sent to a different email address
 
 ---
 
@@ -803,16 +695,13 @@ Decline invitation to Event Calendar.
 **Request Body:** None
 
 **Response:** `200 OK`
-```json
-{
-  "message": "Invitation declined"
-}
-```
+Returns updated membership object with status "declined"
 
 **Errors:**
-- `404` - Invalid token or invitation not found
-- `400` - Invitation has expired (>30 days old)
-- `409` - Already declined
+- `400` - Invitation not found
+- `400` - Invitation already accepted/declined
+- `400` - This invitation has expired
+- `400` - This invitation was sent to a different email address
 
 ---
 
@@ -821,15 +710,15 @@ Decline invitation to Event Calendar.
 Resend invitation email.
 
 **Authentication:** Required
-**Authorization:** User must be a member of the Event Calendar
+**Authorization:** Owner only (calendar owner)
 
 **Response:** `200 OK`
-```json
-{
-  "message": "Invitation resent",
-  "invitation_url": "https://app.familyschedule.app/invitations/secure-token-uuid"
-}
-```
+Returns updated invitation object with new invited_at timestamp
+
+**Errors:**
+- `400` - Invitation not found
+- `400` - Only the calendar owner can resend invitations
+- `400` - Can only resend pending invitations
 
 ---
 
@@ -838,41 +727,36 @@ Resend invitation email.
 Cancel pending invitation.
 
 **Authentication:** Required
-**Authorization:** User must be a member of the Event Calendar
+**Authorization:** Owner only (calendar owner)
 
 **Response:** `204 No Content`
 
+**Errors:**
+- `400` - Invitation not found
+- `400` - Only the calendar owner can cancel invitations
+- `400` - Can only cancel pending invitations
+
 ---
 
-### DELETE /api/event-calendars/:id/members/:user_id
+### DELETE /api/memberships/:id
 
 Remove member from Event Calendar.
 
 **Authentication:** Required
-**Authorization:** Any member can remove others (except owner)
+**Authorization:** Owner only (calendar owner)
 
 **Response:** `204 No Content`
 
 **Side Effects:**
-- All events deleted from removed member's Google Calendar
+- All events reassigned from removed member to calendar owner
+- All synced events deleted from removed member's Google Calendar
 - Member loses access to all events
+- WebSocket broadcasts: MEMBER_REMOVED, EVENT_ASSIGNED (for each reassigned event)
 
 **Errors:**
-- `403` - Cannot remove owner
-- `404` - Member not found
-
----
-
-### DELETE /api/event-calendars/:id/members/me
-
-Leave Event Calendar (self-removal).
-
-**Authentication:** Required
-
-**Response:** `204 No Content`
-
-**Errors:**
-- `403` - Owner cannot leave (must delete calendar instead)
+- `400` - Membership not found
+- `400` - Only the calendar owner can remove members
+- `400` - Can only remove accepted members
 
 ---
 
@@ -888,31 +772,21 @@ Create new child.
 ```json
 {
   "name": "Emma",
-  "photo": "base64-encoded-image",
+  "photo_url": "https://...",
   "date_of_birth": "2015-05-15"
 }
 ```
 
 **Validation:**
-- `name`: Required, 1-50 chars, unique within accessible children
-- `photo`: Optional, max 5MB, JPG/PNG/HEIC
-- `date_of_birth`: Optional, cannot be future date
+- `name`: Required
+- `photo_url`: Optional
+- `date_of_birth`: Optional
 
 **Response:** `201 Created`
-```json
-{
-  "id": "child-uuid",
-  "name": "Emma",
-  "photo_url": "https://...",
-  "date_of_birth": "2015-05-15",
-  "age": 8,
-  "created_at": "2024-01-01T00:00:00Z"
-}
-```
+Returns created child object
 
 **Errors:**
-- `409` - Duplicate name
-- `400` - Future date of birth
+- `400` - Child name is required
 
 ---
 
@@ -923,57 +797,22 @@ List all accessible children.
 **Authentication:** Required
 
 **Response:** `200 OK`
-```json
-{
-  "data": [
-    {
-      "id": "child-uuid",
-      "name": "Emma",
-      "photo_url": "https://...",
-      "date_of_birth": "2015-05-15",
-      "age": 8,
-      "event_calendar_count": 3,
-      "upcoming_events_count": 12
-    }
-  ]
-}
-```
+Returns array of child objects
 
 ---
 
 ### GET /api/children/:id
 
-Get child details with associated Event Calendars.
+Get child details.
 
 **Authentication:** Required
 **Authorization:** User must have access via Event Calendar membership
 
 **Response:** `200 OK`
-```json
-{
-  "id": "child-uuid",
-  "name": "Emma",
-  "photo_url": "https://...",
-  "date_of_birth": "2015-05-15",
-  "age": 8,
-  "event_calendars": [
-    {
-      "id": "calendar-uuid",
-      "name": "Soccer - Spring 2024",
-      "upcoming_events_count": 12,
-      "next_event": {
-        "title": "Game vs. Blue Team",
-        "start_time": "2024-01-15T17:00:00Z"
-      }
-    }
-  ],
-  "created_at": "2024-01-01T00:00:00Z"
-}
-```
+Returns child object
 
 **Errors:**
 - `404` - Child not found
-- `403` - No access to this child
 
 ---
 
@@ -982,54 +821,44 @@ Get child details with associated Event Calendars.
 Update child information.
 
 **Authentication:** Required
-**Authorization:** Any parent with access can edit
+**Authorization:** User must have access via Event Calendar membership
 
 **Request Body:**
 ```json
 {
   "name": "Emma Rose",
-  "photo": "base64-encoded-image",
+  "photo_url": "https://...",
   "date_of_birth": "2015-05-15"
 }
 ```
 
 **Response:** `200 OK`
-```json
-{
-  "id": "child-uuid",
-  "name": "Emma Rose",
-  "photo_url": "https://...",
-  "date_of_birth": "2015-05-15",
-  "age": 8,
-  "updated_at": "2024-01-01T00:00:00Z"
-}
-```
+Returns updated child object
 
 **Errors:**
-- `409` - Duplicate name
-- `404` - Child not found
+- `404` - Child not found or access denied
 
 ---
 
 ### DELETE /api/children/:id
 
-Delete child (only if no Event Calendars exist).
+Delete child.
 
 **Authentication:** Required
-**Authorization:** Any parent with access can delete
+**Authorization:** User must have access via Event Calendar membership
 
-**Request Body:**
+**Request Body:** None
+
+**Response:** `200 OK`
 ```json
 {
-  "confirmation": "DELETE"
+  "message": "Child deleted successfully"
 }
 ```
 
-**Response:** `204 No Content`
-
 **Errors:**
-- `409` - Child has Event Calendars (must delete calendars first)
-- `400` - Invalid confirmation
+- `400` - Cannot delete child with existing event calendars
+- `404` - Child not found or access denied
 
 ---
 
@@ -1037,137 +866,34 @@ Delete child (only if no Event Calendars exist).
 
 ### GET /api/events
 
-List events with filtering and pagination.
+List events with filtering.
 
 **Authentication:** Required
 
 **Query Parameters:**
-- `child_id` (optional) - Filter by child
-- `assigned_to` (optional) - "me", "unassigned", or user UUID
-- `start_date` (optional) - ISO 8601 date
-- `end_date` (optional) - ISO 8601 date
-- `page` (default: 1)
-- `limit` (default: 50, max: 100)
+- `calendar_id` (optional) - Filter by calendar
+- `start_date` (optional) - Filter events starting after this date
+- `end_date` (optional) - Filter events starting before this date
+- `unassigned` (optional) - "true" to only show unassigned events
+- `assigned_to_me` (optional) - "true" to only show events assigned to me
 
 **Response:** `200 OK`
-```json
-{
-  "data": [
-    {
-      "id": "event-uuid",
-      "title": "Soccer Practice",
-      "description": "Arrive 15 minutes early. Bring water bottle.",
-      "location_address": "123 Field St, City, State",
-      "location_latitude": 37.7749,
-      "location_longitude": -122.4194,
-      "start_time": "2024-01-15T17:00:00Z",
-      "end_time": "2024-01-15T18:30:00Z",
-      "all_day": false,
-      "early_arrival_minutes": 15,
-      "parsed_instructions": "Bring water bottle",
-      "child": {
-        "id": "child-uuid",
-        "name": "Emma"
-      },
-      "event_calendar": {
-        "id": "calendar-uuid",
-        "name": "Soccer - Spring 2024",
-        "color": "#FF5733"
-      },
-      "assigned_to": {
-        "id": "user-uuid",
-        "name": "John Doe"
-      },
-      "is_assigned_to_me": true,
-      "departure_time": "2024-01-15T16:15:00Z",
-      "return_home_time": "2024-01-15T19:00:00Z",
-      "created_at": "2024-01-01T00:00:00Z"
-    }
-  ],
-  "pagination": {
-    "page": 1,
-    "limit": 50,
-    "total": 150,
-    "totalPages": 3
-  }
-}
-```
+Returns array of event objects
 
 ---
 
 ### GET /api/events/:id
 
-Get event details with timing breakdown.
+Get single event details.
 
 **Authentication:** Required
 **Authorization:** User must be member of event's Event Calendar
 
 **Response:** `200 OK`
-```json
-{
-  "id": "event-uuid",
-  "title": "Soccer Practice",
-  "description": "Arrive 15 minutes early. Bring water bottle.",
-  "location_address": "123 Field St, City, State",
-  "location_latitude": 37.7749,
-  "location_longitude": -122.4194,
-  "start_time": "2024-01-15T17:00:00Z",
-  "end_time": "2024-01-15T18:30:00Z",
-  "all_day": false,
-  "early_arrival_minutes": 15,
-  "parsed_instructions": "Bring water bottle",
-  "parsed_items_to_bring": ["water bottle"],
-  "child": {
-    "id": "child-uuid",
-    "name": "Emma",
-    "photo_url": "https://..."
-  },
-  "event_calendar": {
-    "id": "calendar-uuid",
-    "name": "Soccer - Spring 2024",
-    "color": "#FF5733"
-  },
-  "assigned_to": {
-    "id": "user-uuid",
-    "name": "John Doe",
-    "email": "john@example.com"
-  },
-  "is_assigned_to_me": true,
-  "timing_for_me": {
-    "departure_time": "2024-01-15T16:15:00Z",
-    "drive_to_duration_minutes": 20,
-    "early_arrival_time": "2024-01-15T16:35:00Z",
-    "event_start_time": "2024-01-15T17:00:00Z",
-    "event_end_time": "2024-01-15T18:30:00Z",
-    "drive_home_duration_minutes": 20,
-    "return_home_time": "2024-01-15T19:00:00Z",
-    "total_time_commitment_minutes": 165
-  },
-  "supplemental_events": [
-    {
-      "id": "supp-uuid",
-      "event_type": "departure",
-      "title": "Leave for Soccer Practice",
-      "start_time": "2024-01-15T16:15:00Z",
-      "duration_minutes": 20
-    },
-    {
-      "id": "supp-uuid",
-      "event_type": "return",
-      "title": "Return Home from Soccer Practice",
-      "start_time": "2024-01-15T18:30:00Z",
-      "duration_minutes": 20
-    }
-  ],
-  "google_calendar_event_id": "google-event-id",
-  "created_at": "2024-01-01T00:00:00Z",
-  "updated_at": "2024-01-01T00:00:00Z"
-}
-```
+Returns event object
 
 **Errors:**
 - `404` - Event not found
-- `403` - No access to this event
 
 ---
 
@@ -1181,70 +907,87 @@ Assign or reassign event to a parent.
 **Request Body:**
 ```json
 {
-  "assigned_to_user_id": "user-uuid"
+  "assigned_to_user_id": "user-uuid",
+  "expected_version": 5
 }
 ```
 
-**Note:** Pass `null` to unassign
+**Notes:**
+- Pass `null` for `assigned_to_user_id` to unassign
+- `expected_version` is optional for optimistic locking (race condition protection)
 
 **Response:** `200 OK`
-```json
-{
-  "id": "event-uuid",
-  "assigned_to": {
-    "id": "user-uuid",
-    "name": "Jane Doe"
-  },
-  "timing": {
-    "departure_time": "2024-01-15T16:20:00Z",
-    "return_home_time": "2024-01-15T19:05:00Z"
-  },
-  "updated_at": "2024-01-01T00:00:00Z"
-}
-```
+Returns updated event object
 
 **Side Effects:**
-- Previous assignee's supplemental events deleted (based on retention setting)
+- Previous assignee's supplemental events handled (based on retention setting)
 - New assignee's supplemental events created
-- Google Calendar updated for all members
-- WebSocket broadcast to all members
+- Google Calendar updated for assignees
+- WebSocket broadcast: EVENT_ASSIGNED or EVENT_UNASSIGNED
 
 **Errors:**
-- `404` - Event or user not found
-- `403` - Target user not a member of Event Calendar
-- `400` - User has no home address (required for assignment)
+- `404` - Event not found or access denied
+- `409` - Event was modified by another user (concurrent modification)
 
 ---
 
 ### GET /api/events/:id/conflicts
 
-Check for scheduling conflicts with this event.
+Check for scheduling conflicts if assigning event to a user.
 
 **Authentication:** Required
 
 **Query Parameters:**
-- `assigned_to_user_id` (required) - Check conflicts for this user
+- `assign_to_user_id` (required) - Check conflicts for this user
 
 **Response:** `200 OK`
 ```json
 {
-  "has_conflict": true,
-  "conflicts": [
-    {
-      "event_id": "other-event-uuid",
-      "title": "Basketball Practice",
-      "time_commitment": {
-        "start": "2024-01-15T16:00:00Z",
-        "end": "2024-01-15T18:00:00Z"
-      },
-      "overlap_period": {
-        "start": "2024-01-15T16:15:00Z",
-        "end": "2024-01-15T18:00:00Z"
-      }
-    }
-  ]
+  "conflicts": [...],
+  "hasConflicts": true
 }
 ```
+
+**Errors:**
+- `400` - assign_to_user_id is required
+- `404` - Event not found or access denied
+
+---
+
+### POST /api/events/resolve-conflict
+
+Resolve a conflict between two events.
+
+**Authentication:** Required
+
+**Request Body:**
+```json
+{
+  "event1_id": "event-uuid-1",
+  "event2_id": "event-uuid-2",
+  "reason": "same_location",
+  "assigned_user_id": "user-uuid"
+}
+```
+
+**Behavior:**
+- For `same_location` reason: Deletes return (drive-home) for event1 and departure (drive-to) for event2
+
+**Response:** `200 OK`
+```json
+{
+  "success": true,
+  "message": "Conflict resolved"
+}
+```
+
+**Side Effects:**
+- Supplemental events deleted from Google Calendar
+- WebSocket broadcast: CONFLICT_RESOLVED
+
+**Errors:**
+- `400` - event1_id, event2_id, reason, and assigned_user_id are required
+- `404` - One or both events not found
 
 ---
 

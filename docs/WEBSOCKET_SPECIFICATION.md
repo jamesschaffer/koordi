@@ -11,7 +11,7 @@
 1. [Overview](#overview)
 2. [Connection Flow](#connection-flow)
 3. [Room Architecture](#room-architecture)
-4. [Event Types & Payloads](#event-types--payloads)
+4. [Event Types](#event-types)
 5. [Server Implementation](#server-implementation)
 6. [Client Implementation](#client-implementation)
 7. [Error Handling](#error-handling)
@@ -52,7 +52,7 @@ WebSocket connections enable real-time synchronization across all users who shar
      │                                              │
      │  1. Connect with JWT token                  │
      ├─────────────────────────────────────────────►
-     │  io.connect(url, { auth: { token: jwt } })  │
+     │  io(url, { auth: { token } })               │
      │                                              │
      │  2. Server validates JWT                    │
      │                                              ├──────────┐
@@ -64,30 +64,25 @@ WebSocket connections enable real-time synchronization across all users who shar
      ◄─────────────────────────────────────────────┤
      │  socket.id = "abc123"                       │
      │                                              │
-     │  4. Client joins calendar rooms             │
-     ├─────────────────────────────────────────────►
-     │  emit('join_calendars')                     │
-     │                                              │
-     │                                              │  5. Query user's calendars
+     │                                              │  4. AUTO: Query user's calendars
      │                                              ├──────────────────►
      │                                              │   Database
      │                                              ◄──────────────────┤
      │                                              │  [cal1, cal2, ...]
      │                                              │
-     │                                              │  6. Join rooms
+     │                                              │  5. AUTO: Join rooms
      │                                              ├──────────┐
-     │                                              │ socket.  │
-     │                                              │ join()   │
+     │                                              │ user:{userId}
+     │                                              │ calendar:{calId}
      │                                              ◄──────────┘
      │                                              │
-     │  7. Confirmation with room list             │
-     ◄─────────────────────────────────────────────┤
-     │  emit('calendars_joined', [cal1, cal2])     │
-     │                                              │
-     │  8. Client ready to receive events          │
+     │  6. Client ready to receive events          │
+     │     (no explicit join required)             │
      │                                              │
      └──────────────────────────────────────────────┘
 ```
+
+**Note:** Unlike the original design, room joining happens **automatically** on connection. The server queries the user's calendar memberships and joins them to all appropriate rooms without requiring a `join_calendars` event from the client.
 
 ### Disconnection & Reconnection
 
@@ -126,310 +121,216 @@ WebSocket connections enable real-time synchronization across all users who shar
 
 ### Room Naming Convention
 
+Two types of rooms:
+
 ```
-calendar:<calendar_id>
+user:<user_id>        # Personal room for user-specific notifications
+calendar:<calendar_id> # Calendar room for all calendar members
 ```
 
 Examples:
-- `calendar:abc-123-def-456`
+- `user:abc-123-def-456`
 - `calendar:xyz-789-uvw-012`
 
 ### Room Membership Rules
 
-1. **Auto-Join:** When user connects, they automatically join all calendars they have access to
-2. **Dynamic Join:** When user accepts invitation, they join the new calendar room
-3. **Dynamic Leave:** When user leaves calendar or is removed, they leave the room
+1. **Auto-Join on Connect:** Server automatically joins user to:
+   - Their personal room (`user:{userId}`)
+   - All calendar rooms they're members of
+2. **Dynamic Join:** Client can emit `join:calendar` when accepting an invitation
+3. **Dynamic Leave:** Client can emit `leave:calendar` when leaving a calendar
 4. **Owner Special Case:** Calendar owner is always in the room until calendar is deleted
 
 ### Room Operations
 
 ```typescript
-// Join room
+// Auto-join on connection (server-side)
+socket.join(`user:${userId}`);
 socket.join(`calendar:${calendarId}`);
 
-// Leave room
-socket.leave(`calendar:${calendarId}`);
+// Manual join after invitation acceptance (client-side)
+socket.on('join:calendar', (calendarId: string) => {
+  socket.join(`calendar:${calendarId}`);
+});
 
-// Emit to room (broadcast to all members)
-io.to(`calendar:${calendarId}`).emit('event_assigned', payload);
+// Manual leave (client-side)
+socket.on('leave:calendar', (calendarId: string) => {
+  socket.leave(`calendar:${calendarId}`);
+});
 
-// Emit to room except sender
-socket.to(`calendar:${calendarId}`).emit('event_assigned', payload);
+// Helper functions for emitting (server-side)
+import { emitToCalendar, emitToUser, SocketEvent } from '../config/socket';
+
+emitToCalendar(io, calendarId, SocketEvent.EVENT_ASSIGNED, payload);
+emitToUser(io, userId, SocketEvent.INVITATION_RECEIVED, payload);
 ```
 
 ---
 
-## EVENT TYPES & PAYLOADS
+## EVENT TYPES
+
+### Event Naming Convention
+
+All events use colon-separated naming:
+```
+category:action
+```
+
+### SocketEvent Enum
+
+```typescript
+// src/config/socket.ts
+export enum SocketEvent {
+  // Event assignment events
+  EVENT_ASSIGNED = 'event:assigned',
+  EVENT_UNASSIGNED = 'event:unassigned',
+
+  // Event CRUD events
+  EVENT_CREATED = 'event:created',
+  EVENT_UPDATED = 'event:updated',
+  EVENT_DELETED = 'event:deleted',
+
+  // Conflict resolution events
+  CONFLICT_RESOLVED = 'conflict:resolved',
+
+  // Calendar sync events
+  CALENDAR_SYNCED = 'calendar:synced',
+  CALENDAR_SYNC_FAILED = 'calendar:sync_failed',
+
+  // Member events
+  MEMBER_ADDED = 'member:added',
+  MEMBER_REMOVED = 'member:removed',
+  INVITATION_RECEIVED = 'invitation:received',
+}
+```
 
 ### Client → Server Events
 
-#### 1. join_calendars
-
-**Purpose:** Client requests to join all their accessible calendar rooms
-
-**Payload:** None (server reads from authenticated user)
-
-```typescript
-socket.emit('join_calendars');
-```
-
-**Server Response:** `calendars_joined` event
-
----
-
-#### 2. join_calendar
+#### join:calendar
 
 **Purpose:** Join a specific calendar room (e.g., after accepting invitation)
 
-**Payload:**
 ```typescript
-{
-  calendar_id: string;
-}
+socket.emit('join:calendar', calendarId);
 ```
 
-**Example:**
-```typescript
-socket.emit('join_calendar', { calendar_id: 'abc-123' });
-```
-
----
-
-#### 3. leave_calendar
+#### leave:calendar
 
 **Purpose:** Leave a specific calendar room
 
-**Payload:**
 ```typescript
-{
-  calendar_id: string;
-}
+socket.emit('leave:calendar', calendarId);
 ```
 
-**Example:**
-```typescript
-socket.emit('leave_calendar', { calendar_id: 'abc-123' });
-```
+**Note:** There is no `join_calendars` event. Room joining happens automatically on connection.
 
 ---
 
 ### Server → Client Events
 
-#### 1. calendars_joined
+#### event:assigned
 
-**Purpose:** Confirmation that client has joined calendar rooms
-
-**Payload:**
-```typescript
-{
-  calendar_ids: string[];
-}
-```
-
-**Example:**
-```typescript
-{
-  "calendar_ids": ["abc-123", "def-456"]
-}
-```
-
----
-
-#### 2. event_created
-
-**Purpose:** New event created (from ICS sync or manual creation)
+**Purpose:** Event assigned to a user
 
 **Payload:**
 ```typescript
 {
-  calendar_id: string;
-  event: {
-    id: string;
-    event_calendar_id: string;
-    title: string;
-    description: string | null;
-    location: string | null;
-    start_time: string; // ISO 8601
-    end_time: string;
-    is_all_day: boolean;
-    assigned_to_user_id: string | null;
-    created_at: string;
-  };
-  actor: {
-    id: string;
-    name: string;
-  } | null; // null for system-generated events
-}
-```
-
-**Example:**
-```typescript
-{
-  "calendar_id": "abc-123",
-  "event": {
-    "id": "event-789",
-    "event_calendar_id": "abc-123",
-    "title": "Soccer Practice",
-    "description": null,
-    "location": "Lincoln Field",
-    "start_time": "2024-03-20T16:00:00.000Z",
-    "end_time": "2024-03-20T17:30:00.000Z",
-    "is_all_day": false,
-    "assigned_to_user_id": null,
-    "created_at": "2024-01-15T10:00:00.000Z"
-  },
-  "actor": null
-}
-```
-
----
-
-#### 3. event_updated
-
-**Purpose:** Event details modified (time, location, etc.)
-
-**Payload:**
-```typescript
-{
-  calendar_id: string;
-  event: {
-    id: string;
-    // ... full event object with updated fields
-  };
-  changes: {
-    field: string;
-    old_value: any;
-    new_value: any;
-  }[];
-  actor: {
-    id: string;
-    name: string;
-  } | null;
-}
-```
-
-**Example:**
-```typescript
-{
-  "calendar_id": "abc-123",
-  "event": { /* full event object */ },
-  "changes": [
-    {
-      "field": "start_time",
-      "old_value": "2024-03-20T16:00:00.000Z",
-      "new_value": "2024-03-20T17:00:00.000Z"
-    }
-  ],
-  "actor": null
-}
-```
-
----
-
-#### 4. event_assigned
-
-**Purpose:** Event assigned or reassigned to a user
-
-**Payload:**
-```typescript
-{
-  calendar_id: string;
   event_id: string;
-  assigned_to: {
-    id: string;
-    name: string;
-    avatar_url: string | null;
-  } | null; // null if unassigned
-  previous_assigned_to: {
-    id: string;
-    name: string;
-  } | null;
-  actor: {
-    id: string;
-    name: string;
-  };
+  event_title: string;
+  assigned_to_user_id: string;
+  start_time: string;
+  end_time: string;
+  event_calendar_id: string;
 }
 ```
 
-**Example:**
-```typescript
-{
-  "calendar_id": "abc-123",
-  "event_id": "event-789",
-  "assigned_to": {
-    "id": "user-456",
-    "name": "Jane Parent",
-    "avatar_url": "https://..."
-  },
-  "previous_assigned_to": null,
-  "actor": {
-    "id": "user-456",
-    "name": "Jane Parent"
-  }
-}
-```
+#### event:unassigned
 
----
+**Purpose:** Event unassigned from a user
 
-#### 5. event_deleted
+**Payload:** Same as `event:assigned`
 
-**Purpose:** Event removed (deleted from ICS feed or manually)
+#### event:created
+
+**Purpose:** New event created (from ICS sync)
 
 **Payload:**
 ```typescript
 {
-  calendar_id: string;
   event_id: string;
-  actor: {
-    id: string;
-    name: string;
-  } | null;
+  event_title: string;
+  event_calendar_id: string;
 }
 ```
 
-**Example:**
+#### event:updated
+
+**Purpose:** Event details modified
+
+**Payload:**
 ```typescript
 {
-  "calendar_id": "abc-123",
-  "event_id": "event-789",
-  "actor": null
+  event_id: string;
+  event_title: string;
+  event_calendar_id: string;
 }
 ```
 
----
+#### event:deleted
 
-#### 6. calendar_synced
+**Purpose:** Event removed
 
-**Purpose:** Calendar sync completed
+**Payload:**
+```typescript
+{
+  event_id: string;
+  event_title: string;
+  event_calendar_id: string;
+}
+```
+
+#### conflict:resolved
+
+**Purpose:** Two events at the same location have been linked (supplemental events shared)
+
+**Payload:**
+```typescript
+{
+  event1_id: string;
+  event2_id: string;
+  reason: 'same_location' | 'other';
+}
+```
+
+#### calendar:synced
+
+**Purpose:** Calendar sync completed successfully
 
 **Payload:**
 ```typescript
 {
   calendar_id: string;
-  status: 'success' | 'error';
-  events_added: number;
+  calendar_name: string;
+  events_created: number;
   events_updated: number;
   events_deleted: number;
-  synced_at: string; // ISO 8601
-  error_message?: string; // if status === 'error'
 }
 ```
 
-**Example:**
+#### calendar:sync_failed
+
+**Purpose:** Calendar sync failed
+
+**Payload:**
 ```typescript
 {
-  "calendar_id": "abc-123",
-  "status": "success",
-  "events_added": 5,
-  "events_updated": 2,
-  "events_deleted": 1,
-  "synced_at": "2024-01-15T10:30:00.000Z"
+  calendar_id: string;
+  calendar_name: string;
+  error: string;
 }
 ```
 
----
-
-#### 7. member_added
+#### member:added
 
 **Purpose:** New member added to calendar
 
@@ -437,39 +338,12 @@ socket.emit('leave_calendar', { calendar_id: 'abc-123' });
 ```typescript
 {
   calendar_id: string;
-  member: {
-    id: string;
-    name: string;
-    email: string;
-    avatar_url: string | null;
-  };
-  actor: {
-    id: string;
-    name: string;
-  };
+  user_email: string;
+  user_name: string;
 }
 ```
 
-**Example:**
-```typescript
-{
-  "calendar_id": "abc-123",
-  "member": {
-    "id": "user-999",
-    "name": "John Parent",
-    "email": "john@example.com",
-    "avatar_url": null
-  },
-  "actor": {
-    "id": "user-456",
-    "name": "Jane Parent"
-  }
-}
-```
-
----
-
-#### 8. member_removed
+#### member:removed
 
 **Purpose:** Member removed from calendar
 
@@ -477,87 +351,19 @@ socket.emit('leave_calendar', { calendar_id: 'abc-123' });
 ```typescript
 {
   calendar_id: string;
-  member_id: string;
-  member_name: string;
-  actor: {
-    id: string;
-    name: string;
-  };
+  user_name: string;
 }
 ```
 
-**Example:**
-```typescript
-{
-  "calendar_id": "abc-123",
-  "member_id": "user-999",
-  "member_name": "John Parent",
-  "actor": {
-    "id": "user-456",
-    "name": "Jane Parent"
-  }
-}
-```
+#### invitation:received
 
----
-
-#### 9. calendar_updated
-
-**Purpose:** Calendar metadata updated (name, color)
+**Purpose:** User received a calendar invitation
 
 **Payload:**
 ```typescript
 {
-  calendar_id: string;
-  changes: {
-    field: string;
-    old_value: any;
-    new_value: any;
-  }[];
-  actor: {
-    id: string;
-    name: string;
-  };
-}
-```
-
-**Example:**
-```typescript
-{
-  "calendar_id": "abc-123",
-  "changes": [
-    {
-      "field": "name",
-      "old_value": "Soccer - Spring 2024",
-      "new_value": "Soccer - Spring Season"
-    }
-  ],
-  "actor": {
-    "id": "user-456",
-    "name": "Jane Parent"
-  }
-}
-```
-
----
-
-#### 10. error
-
-**Purpose:** Error occurred during WebSocket operation
-
-**Payload:**
-```typescript
-{
-  error_code: string;
-  message: string;
-}
-```
-
-**Example:**
-```typescript
-{
-  "error_code": "CALENDAR_NOT_FOUND",
-  "message": "Calendar not found or you don't have access"
+  calendar_name: string;
+  inviter_name: string;
 }
 ```
 
@@ -568,136 +374,93 @@ socket.emit('leave_calendar', { calendar_id: 'abc-123' });
 ### Socket.io Server Setup
 
 ```typescript
-// src/socket/index.ts
-import { Server } from 'socket.io';
-import { Server as HttpServer } from 'http';
+// src/config/socket.ts
+import { Server as SocketServer } from 'socket.io';
+import { Server as HTTPServer } from 'http';
 import { verifyToken } from '../utils/jwt';
-import { PrismaClient } from '@prisma/client';
-import logger from '../utils/logger';
+import { prisma } from '../lib/prisma';
 
-const prisma = new PrismaClient();
-
-export function initializeSocketServer(httpServer: HttpServer) {
-  const io = new Server(httpServer, {
+export function initializeSocketServer(httpServer: HTTPServer): SocketServer {
+  const io = new SocketServer(httpServer, {
     cors: {
       origin: process.env.FRONTEND_URL || 'http://localhost:5173',
       credentials: true,
     },
-    pingTimeout: 60000,
-    pingInterval: 25000,
+    transports: ['websocket', 'polling'],
   });
 
   // Authentication middleware
   io.use(async (socket, next) => {
-    const token = socket.handshake.auth.token;
-
-    if (!token) {
-      return next(new Error('Authentication error: Missing token'));
-    }
-
     try {
-      const payload = verifyToken(token);
+      const token = socket.handshake.auth.token;
 
-      // Verify user exists
-      const user = await prisma.user.findUnique({
-        where: { id: payload.sub },
-        select: { id: true, email: true, name: true },
-      });
-
-      if (!user) {
-        return next(new Error('Authentication error: User not found'));
+      if (!token) {
+        return next(new Error('Authentication token required'));
       }
 
-      // Attach user to socket
-      socket.data.user = user;
+      // Verify JWT token
+      const decoded = verifyToken(token);
+      if (!decoded || typeof decoded === 'string') {
+        return next(new Error('Invalid token'));
+      }
+
+      // Attach user info to socket
+      (socket as any).userId = decoded.userId;
+      (socket as any).email = decoded.email;
+
       next();
     } catch (error) {
-      logger.error('Socket authentication failed', { error });
-      return next(new Error('Authentication error: Invalid token'));
+      console.error('Socket authentication error:', error);
+      next(new Error('Authentication failed'));
     }
   });
 
-  io.on('connection', (socket) => {
-    const user = socket.data.user;
-    logger.info('Socket connected', { socketId: socket.id, userId: user.id });
+  // Connection handler
+  io.on('connection', async (socket) => {
+    const userId = (socket as any).userId;
+    const email = (socket as any).email;
 
-    // Handle join_calendars
-    socket.on('join_calendars', async () => {
-      try {
-        // Get all calendars user is a member of
-        const memberships = await prisma.eventCalendarMembership.findMany({
-          where: {
-            user_id: user.id,
-            status: 'accepted',
-          },
-          select: {
-            event_calendar_id: true,
-          },
-        });
+    console.log(`✅ WebSocket connected: User ${email} (${userId})`);
 
-        const calendarIds = memberships.map((m) => m.event_calendar_id);
+    // Join user to their personal room
+    socket.join(`user:${userId}`);
 
-        // Join rooms
-        for (const calendarId of calendarIds) {
-          socket.join(`calendar:${calendarId}`);
-        }
+    // AUTO-JOIN: Join user to all their Event Calendar rooms
+    try {
+      const calendars = await prisma.eventCalendarMembership.findMany({
+        where: { user_id: userId },
+        select: { event_calendar_id: true },
+      });
 
-        logger.info('User joined calendar rooms', {
-          userId: user.id,
-          calendarCount: calendarIds.length,
-        });
+      calendars.forEach((membership) => {
+        socket.join(`calendar:${membership.event_calendar_id}`);
+      });
 
-        // Confirm to client
-        socket.emit('calendars_joined', { calendar_ids: calendarIds });
-      } catch (error) {
-        logger.error('Failed to join calendars', { userId: user.id, error });
-        socket.emit('error', {
-          error_code: 'JOIN_CALENDARS_FAILED',
-          message: 'Failed to join calendar rooms',
-        });
-      }
+      console.log(`📅 User ${email} joined ${calendars.length} calendar room(s)`);
+    } catch (error) {
+      console.error('Error joining calendar rooms:', error);
+    }
+
+    // Manual room joining (after accepting invitation)
+    socket.on('join:calendar', (calendarId: string) => {
+      socket.join(`calendar:${calendarId}`);
+      console.log(`📅 User ${email} manually joined calendar:${calendarId}`);
     });
 
-    // Handle join_calendar
-    socket.on('join_calendar', async ({ calendar_id }) => {
-      try {
-        // Verify user has access
-        const membership = await prisma.eventCalendarMembership.findFirst({
-          where: {
-            event_calendar_id: calendar_id,
-            user_id: user.id,
-            status: 'accepted',
-          },
-        });
-
-        if (!membership) {
-          socket.emit('error', {
-            error_code: 'CALENDAR_ACCESS_DENIED',
-            message: 'You do not have access to this calendar',
-          });
-          return;
-        }
-
-        socket.join(`calendar:${calendar_id}`);
-        logger.info('User joined calendar room', { userId: user.id, calendarId: calendar_id });
-      } catch (error) {
-        logger.error('Failed to join calendar', { userId: user.id, calendarId: calendar_id, error });
-        socket.emit('error', {
-          error_code: 'JOIN_CALENDAR_FAILED',
-          message: 'Failed to join calendar room',
-        });
-      }
+    // Manual room leaving
+    socket.on('leave:calendar', (calendarId: string) => {
+      socket.leave(`calendar:${calendarId}`);
+      console.log(`📅 User ${email} left calendar:${calendarId}`);
     });
 
-    // Handle leave_calendar
-    socket.on('leave_calendar', ({ calendar_id }) => {
-      socket.leave(`calendar:${calendar_id}`);
-      logger.info('User left calendar room', { userId: user.id, calendarId: calendar_id });
+    // Handle disconnection
+    socket.on('disconnect', () => {
+      console.log(`❌ WebSocket disconnected: User ${email} (${userId})`);
     });
 
-    // Handle disconnect
-    socket.on('disconnect', (reason) => {
-      logger.info('Socket disconnected', { socketId: socket.id, userId: user.id, reason });
+    // Handle errors
+    socket.on('error', (error) => {
+      console.error(`⚠️ Socket error for user ${email}:`, error);
     });
   });
 
@@ -705,200 +468,244 @@ export function initializeSocketServer(httpServer: HttpServer) {
 }
 ```
 
-### Broadcasting Events from Backend
+### Helper Functions for Emitting
 
 ```typescript
-// src/services/event-service.ts
-import { getSocketServer } from '../socket';
+// src/config/socket.ts (continued)
 
-export async function assignEvent(eventId: string, userId: string, actorId: string) {
-  const event = await prisma.event.findUnique({
-    where: { id: eventId },
-    include: {
-      event_calendar: { select: { id: true } },
-      assigned_to: { select: { id: true, name: true, avatar_url: true } },
-    },
-  });
+// Helper function to emit events to a calendar room
+export function emitToCalendar(
+  io: SocketServer,
+  calendarId: string,
+  event: SocketEvent,
+  data: any,
+) {
+  io.to(`calendar:${calendarId}`).emit(event, data);
+  console.log(`📡 Emitted ${event} to calendar:${calendarId}`);
+}
 
-  if (!event) {
-    throw new NotFoundError('EVENT_NOT_FOUND', 'Event not found');
-  }
+// Helper function to emit events to a specific user
+export function emitToUser(
+  io: SocketServer,
+  userId: string,
+  event: SocketEvent,
+  data: any,
+) {
+  io.to(`user:${userId}`).emit(event, data);
+  console.log(`📡 Emitted ${event} to user:${userId}`);
+}
+```
 
-  const previousAssignedTo = event.assigned_to;
+### Broadcasting Events from Routes
 
-  // Update assignment
-  const updatedEvent = await prisma.event.update({
-    where: { id: eventId },
-    data: { assigned_to_user_id: userId },
-    include: {
-      assigned_to: { select: { id: true, name: true, avatar_url: true } },
-    },
-  });
+```typescript
+// src/routes/event.ts
+import { SocketEvent, emitToCalendar } from '../config/socket';
 
-  const actor = await prisma.user.findUnique({
-    where: { id: actorId },
-    select: { id: true, name: true },
-  });
+router.patch('/:id/assign', authenticate, async (req, res) => {
+  // ... assignment logic ...
+
+  // Determine which event to emit
+  const socketEvent = newAssigneeId
+    ? SocketEvent.EVENT_ASSIGNED
+    : SocketEvent.EVENT_UNASSIGNED;
 
   // Broadcast to WebSocket room
-  const io = getSocketServer();
-  io.to(`calendar:${event.event_calendar.id}`).emit('event_assigned', {
-    calendar_id: event.event_calendar.id,
-    event_id: eventId,
-    assigned_to: updatedEvent.assigned_to,
-    previous_assigned_to: previousAssignedTo,
-    actor,
+  emitToCalendar(req.app.get('io'), event.event_calendar_id, socketEvent, {
+    event_id: event.id,
+    event_title: event.title,
+    assigned_to_user_id: newAssigneeId,
+    start_time: event.start_time,
+    end_time: event.end_time,
+    event_calendar_id: event.event_calendar_id,
   });
 
-  return updatedEvent;
-}
+  res.json({ event: updatedEvent });
+});
 ```
 
 ---
 
 ## CLIENT IMPLEMENTATION
 
-### Socket.io Client Setup
+### Socket Context Provider
 
 ```typescript
-// frontend/src/lib/socket-client.ts
+// frontend/src/contexts/SocketContext.tsx
+import { createContext, useContext, useEffect, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
-import { authClient } from './auth-client';
+import { useAuth } from './AuthContext';
 
-class SocketClient {
-  private socket: Socket | null = null;
+interface SocketContextValue {
+  socket: Socket | null;
+  isConnected: boolean;
+}
 
-  connect() {
-    const token = authClient.getToken();
+const SocketContext = createContext<SocketContextValue>({
+  socket: null,
+  isConnected: false,
+});
 
-    if (!token) {
-      console.error('Cannot connect socket: No auth token');
+export function useSocket() {
+  return useContext(SocketContext);
+}
+
+export function SocketProvider({ children }: { children: ReactNode }) {
+  const { token, user } = useAuth();
+  const [socket, setSocket] = useState<Socket | null>(null);
+  const [isConnected, setIsConnected] = useState(false);
+
+  useEffect(() => {
+    // Only connect if user is authenticated
+    if (!token || !user) {
+      if (socket) {
+        socket.disconnect();
+        setSocket(null);
+        setIsConnected(false);
+      }
       return;
     }
 
-    this.socket = io(import.meta.env.VITE_WEBSOCKET_URL || 'http://localhost:3000', {
+    // Don't reconnect if already connected
+    if (socket?.connected) return;
+
+    const socketUrl = import.meta.env.VITE_SOCKET_URL || 'http://localhost:3000';
+
+    const newSocket = io(socketUrl, {
       auth: { token },
-      autoConnect: true,
+      transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionDelay: 1000,
       reconnectionDelayMax: 5000,
       reconnectionAttempts: 5,
+      path: '/socket.io',
     });
 
-    this.setupEventHandlers();
-  }
-
-  private setupEventHandlers() {
-    if (!this.socket) return;
-
-    this.socket.on('connect', () => {
-      console.log('Socket connected:', this.socket?.id);
-      this.socket?.emit('join_calendars');
+    // Connection event handlers
+    newSocket.on('connect', () => {
+      console.log('✅ WebSocket connected');
+      setIsConnected(true);
     });
 
-    this.socket.on('disconnect', (reason) => {
-      console.log('Socket disconnected:', reason);
+    newSocket.on('disconnect', (reason) => {
+      console.log(`❌ WebSocket disconnected: ${reason}`);
+      setIsConnected(false);
     });
 
-    this.socket.on('calendars_joined', ({ calendar_ids }) => {
-      console.log('Joined calendar rooms:', calendar_ids);
+    newSocket.on('connect_error', (error) => {
+      console.error('⚠️ WebSocket connection error:', error.message);
+      setIsConnected(false);
     });
 
-    this.socket.on('error', ({ error_code, message }) => {
-      console.error('Socket error:', error_code, message);
+    newSocket.on('reconnect', (attemptNumber) => {
+      console.log(`🔄 WebSocket reconnected after ${attemptNumber} attempts`);
+      setIsConnected(true);
     });
-  }
 
-  on(event: string, handler: (...args: any[]) => void) {
-    this.socket?.on(event, handler);
-  }
-
-  off(event: string, handler?: (...args: any[]) => void) {
-    this.socket?.off(event, handler);
-  }
-
-  emit(event: string, data?: any) {
-    this.socket?.emit(event, data);
-  }
-
-  disconnect() {
-    this.socket?.disconnect();
-    this.socket = null;
-  }
-}
-
-export const socketClient = new SocketClient();
-```
-
-### React Hook for WebSocket Events
-
-```typescript
-// frontend/src/hooks/useSocketEvent.ts
-import { useEffect } from 'react';
-import { socketClient } from '../lib/socket-client';
-
-export function useSocketEvent<T = any>(
-  event: string,
-  handler: (data: T) => void
-) {
-  useEffect(() => {
-    socketClient.on(event, handler);
+    setSocket(newSocket);
 
     return () => {
-      socketClient.off(event, handler);
+      newSocket.disconnect();
     };
-  }, [event, handler]);
+  }, [token, user]);
+
+  return (
+    <SocketContext.Provider value={{ socket, isConnected }}>
+      {children}
+    </SocketContext.Provider>
+  );
 }
 ```
 
-### React Query Integration
+### Socket Events Hook
 
 ```typescript
-// frontend/src/hooks/useEvents.ts
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useSocketEvent } from './useSocketEvent';
-import { apiRequest } from '../lib/api-client';
+// frontend/src/hooks/useSocketEvents.ts
+import { useEffect } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { useSocket } from '../contexts/SocketContext';
+import { toast } from 'sonner';
 
-export function useEvents(calendarId: string) {
+// Socket event types (must match backend)
+export const SocketEvent = {
+  EVENT_ASSIGNED: 'event:assigned',
+  EVENT_UNASSIGNED: 'event:unassigned',
+  EVENT_CREATED: 'event:created',
+  EVENT_UPDATED: 'event:updated',
+  EVENT_DELETED: 'event:deleted',
+  CONFLICT_RESOLVED: 'conflict:resolved',
+  CALENDAR_SYNCED: 'calendar:synced',
+  CALENDAR_SYNC_FAILED: 'calendar:sync_failed',
+  MEMBER_ADDED: 'member:added',
+  MEMBER_REMOVED: 'member:removed',
+  INVITATION_RECEIVED: 'invitation:received',
+};
+
+export function useSocketEvents() {
+  const { socket, isConnected } = useSocket();
   const queryClient = useQueryClient();
 
-  // Fetch events
-  const query = useQuery({
-    queryKey: ['events', calendarId],
-    queryFn: () => apiRequest(`/api/events?calendar_id=${calendarId}`),
-  });
+  useEffect(() => {
+    if (!socket || !isConnected) return;
 
-  // Listen for event_created
-  useSocketEvent('event_created', (data) => {
-    if (data.calendar_id === calendarId) {
-      queryClient.invalidateQueries({ queryKey: ['events', calendarId] });
-    }
-  });
+    // Event Assignment
+    socket.on(SocketEvent.EVENT_ASSIGNED, (data) => {
+      queryClient.invalidateQueries({ queryKey: ['events'] });
+      queryClient.invalidateQueries({ queryKey: ['event', data.event_id] });
+      toast.success(`Event assigned: ${data.event_title}`);
+    });
 
-  // Listen for event_assigned
-  useSocketEvent('event_assigned', (data) => {
-    if (data.calendar_id === calendarId) {
-      // Optimistic update
-      queryClient.setQueryData(['events', calendarId], (oldData: any[]) => {
-        return oldData.map((event) =>
-          event.id === data.event_id
-            ? { ...event, assigned_to: data.assigned_to }
-            : event
-        );
+    // Event Unassignment
+    socket.on(SocketEvent.EVENT_UNASSIGNED, (data) => {
+      queryClient.invalidateQueries({ queryKey: ['events'] });
+      toast.info(`Event unassigned: ${data.event_title}`);
+    });
+
+    // Calendar Synced
+    socket.on(SocketEvent.CALENDAR_SYNCED, (data) => {
+      queryClient.invalidateQueries({ queryKey: ['events'] });
+      queryClient.invalidateQueries({ queryKey: ['calendars'] });
+
+      const changes = [];
+      if (data.events_created > 0) changes.push(`${data.events_created} created`);
+      if (data.events_updated > 0) changes.push(`${data.events_updated} updated`);
+      if (data.events_deleted > 0) changes.push(`${data.events_deleted} deleted`);
+
+      if (changes.length > 0) {
+        toast.success(`Calendar "${data.calendar_name}" synced`, {
+          description: changes.join(', '),
+        });
+      }
+    });
+
+    // Member Added
+    socket.on(SocketEvent.MEMBER_ADDED, (data) => {
+      queryClient.invalidateQueries({ queryKey: ['calendars'] });
+      toast.success('New member joined', {
+        description: `${data.user_name} joined the calendar`,
       });
-    }
-  });
+    });
 
-  // Listen for event_deleted
-  useSocketEvent('event_deleted', (data) => {
-    if (data.calendar_id === calendarId) {
-      queryClient.setQueryData(['events', calendarId], (oldData: any[]) => {
-        return oldData.filter((event) => event.id !== data.event_id);
+    // Invitation Received
+    socket.on(SocketEvent.INVITATION_RECEIVED, (data) => {
+      queryClient.invalidateQueries({ queryKey: ['invitations'] });
+      toast.info('New invitation received', {
+        description: `You've been invited to join ${data.calendar_name}`,
       });
-    }
-  });
+    });
 
-  return query;
+    // Conflict Resolved
+    socket.on(SocketEvent.CONFLICT_RESOLVED, (data) => {
+      queryClient.invalidateQueries({ queryKey: ['events'] });
+    });
+
+    // Cleanup listeners on unmount
+    return () => {
+      Object.values(SocketEvent).forEach((event) => {
+        socket.off(event);
+      });
+    };
+  }, [socket, isConnected, queryClient]);
 }
 ```
 
@@ -1071,47 +878,50 @@ test('should see real-time event assignment', async ({ page, context }) => {
 ## SUMMARY CHECKLIST
 
 ### Server Implementation
-- [ ] Socket.io server initialized with CORS configuration
-- [ ] JWT authentication middleware configured
-- [ ] User authentication on connection
-- [ ] Room join/leave handlers implemented
-- [ ] Event broadcasting from backend services
-- [ ] Error handling and logging
-- [ ] Rate limiting configured
-- [ ] Input validation for all events
+- [x] Socket.io server initialized with CORS configuration (`src/config/socket.ts`)
+- [x] JWT authentication middleware configured
+- [x] User info attached to socket on connection
+- [x] Auto-join to personal and calendar rooms on connection
+- [x] Manual `join:calendar` and `leave:calendar` handlers
+- [x] Helper functions (`emitToCalendar`, `emitToUser`)
+- [x] Console logging for debugging
+- [ ] Rate limiting (not implemented)
+- [ ] Input validation for client events (not implemented)
 
 ### Client Implementation
-- [ ] Socket.io client configured with auth token
-- [ ] Auto-reconnection enabled
-- [ ] Event handlers for all event types
-- [ ] React hooks for WebSocket events
-- [ ] React Query integration for cache updates
-- [ ] Connection error handling
-- [ ] User notifications for disconnections
+- [x] Socket.io client via React Context (`SocketContext.tsx`)
+- [x] Auth token passed on connection
+- [x] Auto-reconnection with configurable attempts
+- [x] Event handlers hook (`useSocketEvents.ts`)
+- [x] React Query cache invalidation on events
+- [x] Toast notifications via `sonner`
+- [x] Connection state tracking (`isConnected`)
 
-### Event Types
-- [ ] event_created
-- [ ] event_updated
-- [ ] event_assigned
-- [ ] event_deleted
-- [ ] calendar_synced
-- [ ] member_added
-- [ ] member_removed
-- [ ] calendar_updated
-- [ ] error
+### Implemented Event Types
+- [x] `event:assigned`
+- [x] `event:unassigned`
+- [x] `event:created`
+- [x] `event:updated`
+- [x] `event:deleted`
+- [x] `conflict:resolved`
+- [x] `calendar:synced`
+- [x] `calendar:sync_failed`
+- [x] `member:added`
+- [x] `member:removed`
+- [x] `invitation:received`
 
 ### Security
-- [ ] JWT authentication required
-- [ ] Room access control implemented
-- [ ] Membership verification before room join
-- [ ] Input validation
-- [ ] Rate limiting
+- [x] JWT authentication required for connection
+- [x] Auto-join based on database memberships
+- [ ] Explicit access verification on manual join (not implemented - trusts client)
+- [ ] Rate limiting (not implemented)
 
-### Testing
+### Not Yet Implemented
 - [ ] Unit tests for authentication
 - [ ] Unit tests for room operations
 - [ ] Integration tests for event broadcasting
 - [ ] E2E tests for real-time updates
+- [ ] `calendar:updated` event for calendar metadata changes
 
 ---
 
