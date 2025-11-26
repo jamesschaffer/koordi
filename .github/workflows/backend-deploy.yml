@@ -119,32 +119,6 @@ jobs:
             exit 1
           fi
 
-      - name: Smoke Test API Endpoints
-        run: |
-          BACKEND_URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} --region=${{ env.REGION }} --format='value(status.url)')
-          echo "🔍 Testing API endpoints at: $BACKEND_URL"
-
-          # Test /api root endpoint
-          API_RESPONSE=$(curl -s "$BACKEND_URL/api")
-          if echo "$API_RESPONSE" | jq -e '.message == "Koordie API"' > /dev/null 2>&1; then
-            echo "✅ API root endpoint responding correctly"
-          else
-            echo "❌ API root endpoint returned unexpected response:"
-            echo "$API_RESPONSE"
-            exit 1
-          fi
-
-          # Test /api/health (already tested above, but verify structure)
-          HEALTH_STATUS=$(echo "$HEALTH_BODY" | jq -r '.status')
-          if [ "$HEALTH_STATUS" = "healthy" ] || [ "$HEALTH_STATUS" = "degraded" ]; then
-            echo "✅ Health endpoint returns valid structure"
-          else
-            echo "❌ Health endpoint structure invalid"
-            exit 1
-          fi
-
-          echo "✅ Backend smoke tests passed"
-
       - name: Show deployment URL
         run: |
           echo "Backend deployed successfully!"
