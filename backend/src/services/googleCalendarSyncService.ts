@@ -191,7 +191,7 @@ export async function syncSupplementalEventToGoogleCalendar(
         console.log(`  Checking for existing Google Calendar event with supplementalId=${supplementalEventId}`);
         const existingEvents = await calendar.events.list({
           calendarId,
-          privateExtendedProperty: `supplementalId=${supplementalEventId}`,
+          privateExtendedProperty: [`supplementalId=${supplementalEventId}`],
           maxResults: 1,
         });
 

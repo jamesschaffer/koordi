@@ -200,7 +200,7 @@ export async function syncMainEventToGoogleCalendar(
         console.log(`  Checking for existing Google Calendar event with icsUid=${event.ics_uid}`);
         const existingEvents = await calendar.events.list({
           calendarId,
-          privateExtendedProperty: `icsUid=${event.ics_uid}`,
+          privateExtendedProperty: [`icsUid=${event.ics_uid}`],
           maxResults: 1,
         });
 
