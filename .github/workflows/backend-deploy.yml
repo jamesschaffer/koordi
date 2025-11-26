@@ -126,7 +126,7 @@ jobs:
 
           # Test /api root endpoint
           API_RESPONSE=$(curl -s "$BACKEND_URL/api")
-          if echo "$API_RESPONSE" | grep -q '"message":"Koordie API"'; then
+          if echo "$API_RESPONSE" | jq -e '.message == "Koordie API"' > /dev/null 2>&1; then
             echo "✅ API root endpoint responding correctly"
           else
             echo "❌ API root endpoint returned unexpected response:"
