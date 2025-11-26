@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getEvents, assignEvent, checkEventConflicts, resolveConflict } from '../lib/api-events';
 import type { Event, ConcurrentModificationError } from '../lib/api-events';
@@ -24,6 +25,7 @@ import {
 
 function Dashboard() {
   const token = localStorage.getItem('auth_token') || '';
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [filter, setFilter] = useState<'all' | 'unassigned' | 'mine'>('all');
@@ -420,14 +422,26 @@ function Dashboard() {
       {!events || events.length === 0 ? (
         <Card className="text-center py-12">
           <CardContent className="pt-6">
-            <p className="text-muted-foreground mb-2">No events found</p>
-            <p className="text-sm text-muted-foreground">
-              {filter === 'all'
-                ? 'Add a calendar and sync it to see events'
-                : filter === 'unassigned'
-                ? 'All events are currently assigned'
-                : 'You have no assigned events'}
-            </p>
+            {(!calendars || calendars.length === 0) ? (
+              <div className="space-y-4">
+                <p className="text-muted-foreground">Add your first calendar</p>
+                <p className="text-sm text-muted-foreground">
+                  Once you add a calendar you can view and manage events with Google Calendar
+                </p>
+                <Button onClick={() => navigate('/calendars?action=add')}>Add Calendar</Button>
+              </div>
+            ) : (
+              <>
+                <p className="text-muted-foreground mb-2">No events found</p>
+                <p className="text-sm text-muted-foreground">
+                  {filter === 'all'
+                    ? 'No upcoming events in your calendars'
+                    : filter === 'unassigned'
+                    ? 'All events are currently assigned'
+                    : 'You have no assigned events'}
+                </p>
+              </>
+            )}
           </CardContent>
         </Card>
       ) : (
