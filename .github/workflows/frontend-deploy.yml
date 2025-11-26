@@ -26,6 +26,35 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Validate Required Secrets
+        run: |
+          echo "🔐 Validating required secrets for frontend deployment..."
+          missing=""
+
+          if [ -z "${{ secrets.GCP_SA_KEY }}" ]; then
+            missing="$missing GCP_SA_KEY"
+          fi
+
+          if [ -z "${{ secrets.GOOGLE_MAPS_API_KEY }}" ]; then
+            missing="$missing GOOGLE_MAPS_API_KEY"
+          fi
+
+          if [ -n "$missing" ]; then
+            echo ""
+            echo "❌ MISSING REQUIRED SECRETS:$missing"
+            echo ""
+            echo "These secrets are required for frontend deployment."
+            echo "Add them at: https://github.com/${{ github.repository }}/settings/secrets/actions"
+            echo ""
+            echo "Required secrets:"
+            echo "  - GCP_SA_KEY: Google Cloud service account JSON key"
+            echo "  - GOOGLE_MAPS_API_KEY: Google Maps API key for address autocomplete"
+            echo ""
+            exit 1
+          fi
+
+          echo "✅ All required secrets present"
+
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
@@ -60,13 +89,46 @@ jobs:
           echo "✅ Build validation passed"
 
       - name: Build and push Docker image
+        id: docker_build
         run: |
           cd frontend
+
+          # Build Docker image
           docker build \
             --build-arg VITE_API_URL=https://api.koordie.com/api \
             --build-arg VITE_GOOGLE_MAPS_API_KEY=${{ secrets.GOOGLE_MAPS_API_KEY }} \
             -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/frontend:${{ github.sha }} \
             -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/frontend:latest .
+
+          # Extract and verify the built bundle before pushing
+          echo "🔍 Verifying Google Maps API key in Docker build..."
+          CONTAINER_ID=$(docker create ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/frontend:${{ github.sha }})
+          docker cp $CONTAINER_ID:/usr/share/nginx/html/assets ./docker-dist-assets
+          docker rm $CONTAINER_ID
+
+          # Check for empty API key (indicates build failure)
+          if grep -q 'googleMapsApiKey:""' ./docker-dist-assets/*.js 2>/dev/null; then
+            echo ""
+            echo "❌ BUILD ERROR: Google Maps API key is EMPTY in the production bundle!"
+            echo ""
+            echo "This means the GOOGLE_MAPS_API_KEY secret was not properly injected."
+            echo "Check that the secret exists and has a valid value."
+            echo ""
+            rm -rf ./docker-dist-assets
+            exit 1
+          fi
+
+          # Verify key is present (look for AIzaSy prefix)
+          if grep -q 'AIzaSy' ./docker-dist-assets/*.js 2>/dev/null; then
+            echo "✅ Google Maps API key verified in production bundle"
+          else
+            echo "⚠️  WARNING: Could not verify Google Maps API key format in bundle"
+            echo "The key may be present but in an unexpected format"
+          fi
+
+          rm -rf ./docker-dist-assets
+
+          # Push verified images
           docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/frontend:${{ github.sha }}
           docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/frontend:latest
 
@@ -119,6 +181,23 @@ jobs:
             HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$FRONTEND_URL$CSS_FILE")
             if [ "$HTTP_CODE" -eq 200 ]; then
               echo "✅ CSS loads successfully"
+            fi
+          fi
+
+          # Verify Google Maps API key is in the deployed bundle
+          if [ -n "$JS_FILE" ]; then
+            JS_CONTENT=$(curl -s "$FRONTEND_URL$JS_FILE")
+            if echo "$JS_CONTENT" | grep -q 'googleMapsApiKey:""'; then
+              echo ""
+              echo "❌ CRITICAL: Google Maps API key is EMPTY in deployed bundle!"
+              echo "This will break address autocomplete for users."
+              echo "Check GOOGLE_MAPS_API_KEY secret in GitHub."
+              echo ""
+              exit 1
+            elif echo "$JS_CONTENT" | grep -q 'AIzaSy'; then
+              echo "✅ Google Maps API key present in bundle"
+            else
+              echo "⚠️  Could not verify Google Maps API key in bundle"
             fi
           fi
 

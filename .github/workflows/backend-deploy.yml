@@ -26,6 +26,35 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Validate Required Secrets
+        run: |
+          echo "🔐 Validating required secrets for backend deployment..."
+          missing=""
+
+          if [ -z "${{ secrets.GCP_SA_KEY }}" ]; then
+            missing="$missing GCP_SA_KEY"
+          fi
+
+          if [ -z "${{ secrets.DATABASE_URL }}" ]; then
+            missing="$missing DATABASE_URL"
+          fi
+
+          if [ -n "$missing" ]; then
+            echo ""
+            echo "❌ MISSING REQUIRED SECRETS:$missing"
+            echo ""
+            echo "These secrets are required for backend deployment."
+            echo "Add them at: https://github.com/${{ github.repository }}/settings/secrets/actions"
+            echo ""
+            echo "Required secrets:"
+            echo "  - GCP_SA_KEY: Google Cloud service account JSON key"
+            echo "  - DATABASE_URL: PostgreSQL connection string for migrations"
+            echo ""
+            exit 1
+          fi
+
+          echo "✅ All required secrets present"
+
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:

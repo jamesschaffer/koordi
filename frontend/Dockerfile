@@ -13,11 +13,16 @@ RUN npm ci
 COPY . .
 
 # Accept build arguments for environment variables
+# These override values in .env.production when provided
 ARG VITE_API_URL
 ARG VITE_GOOGLE_MAPS_API_KEY
 
 # Build for production
-RUN npm run build
+# Only export ARGs as env vars if they have non-empty values
+# This prevents empty ARGs from overriding .env.production values
+RUN if [ -n "$VITE_API_URL" ]; then export VITE_API_URL="$VITE_API_URL"; fi && \
+    if [ -n "$VITE_GOOGLE_MAPS_API_KEY" ]; then export VITE_GOOGLE_MAPS_API_KEY="$VITE_GOOGLE_MAPS_API_KEY"; fi && \
+    npm run build
 
 # Stage 2: Serve with nginx
 FROM nginx:alpine
