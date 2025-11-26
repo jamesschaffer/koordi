@@ -187,9 +187,16 @@ function Calendars() {
       });
     },
     onError: (error: any) => {
-      toast.error('Failed to sync calendar', {
-        description: error.message || 'Please try again',
-      });
+      // Handle 409 Conflict (sync already in progress) with specific message
+      if (error.response?.status === 409) {
+        toast.info('Sync already in progress', {
+          description: 'Another sync is currently running for this calendar. Please wait for it to complete.',
+        });
+      } else {
+        toast.error('Failed to sync calendar', {
+          description: error.message || 'Please try again',
+        });
+      }
     },
   });
 

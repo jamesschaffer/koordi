@@ -193,11 +193,43 @@ export async function syncMainEventToGoogleCalendar(
     if (!existingSync) {
       console.log(`  Creating NEW Google Calendar event`);
 
+      // ⭐ IDEMPOTENCY CHECK: Before creating, verify event doesn't already exist
+      // This prevents duplicates from race conditions where multiple requests
+      // check for existing sync before any have completed
+      try {
+        console.log(`  Checking for existing Google Calendar event with icsUid=${event.ics_uid}`);
+        const existingEvents = await calendar.events.list({
+          calendarId,
+          privateExtendedProperty: `icsUid=${event.ics_uid}`,
+          maxResults: 1,
+        });
+
+        if (existingEvents.data.items && existingEvents.data.items.length > 0) {
+          const existingGoogleEvent = existingEvents.data.items[0];
+          console.log(`  ⚠️  IDEMPOTENCY: Event already exists in Google Calendar`);
+          console.log(`  Using existing Google Event ID: ${existingGoogleEvent.id}`);
+          console.log(`  This likely indicates a race condition was prevented`);
+          return existingGoogleEvent.id!;
+        }
+        console.log(`  No existing event found, proceeding with creation`);
+      } catch (listError: any) {
+        console.warn(`  Failed to check for existing Google Calendar event:`, listError.message);
+        // Continue with creation if check fails - don't block on this safety check
+      }
+
       // Create new event for this user
       try {
         const response = await calendar.events.insert({
           calendarId,
-          requestBody: eventBody,
+          requestBody: {
+            ...eventBody,
+            // Add ICS UID as private extended property for future idempotency checks
+            extendedProperties: {
+              private: {
+                icsUid: event.ics_uid,
+              },
+            },
+          },
         });
 
         const googleEventId = response.data.id;

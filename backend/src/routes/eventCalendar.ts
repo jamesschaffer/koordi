@@ -6,6 +6,10 @@ import * as icsSyncService from '../services/icsSyncService';
 
 const router = express.Router();
 
+// In-memory lock to prevent concurrent syncs for the same calendar
+// Maps calendarId -> Promise (sync in progress)
+const syncLocks = new Map<string, Promise<any>>();
+
 // All routes require authentication
 router.use(authenticateToken);
 
@@ -223,31 +227,58 @@ router.post('/validate-ics', async (req: Request, res: Response) => {
 /**
  * POST /api/calendars/:id/sync
  * Manually trigger sync for an event calendar
+ *
+ * Race Condition Prevention:
+ * Uses in-memory lock to prevent concurrent sync requests for the same calendar.
+ * If a sync is already in progress, returns 409 Conflict.
  */
 router.post('/:id/sync', async (req: Request, res: Response) => {
+  const calendarId = req.params.id;
+
+  // Check if sync already in progress for this calendar
+  if (syncLocks.has(calendarId)) {
+    console.log(`[POST /calendars/${calendarId}/sync] Sync already in progress, rejecting concurrent request`);
+    return res.status(409).json({
+      error: 'Sync already in progress for this calendar',
+      message: 'Another sync is currently running. Please wait for it to complete.',
+      retryAfter: 5, // Suggest retry after 5 seconds
+    });
+  }
+
   try {
     const userId = req.user?.userId;
     if (!userId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    // Verify user has access to this calendar
-    const calendar = await eventCalendarService.getEventCalendarById(req.params.id, userId);
+    // Verify user has access to this calendar (BEFORE creating lock)
+    const calendar = await eventCalendarService.getEventCalendarById(calendarId, userId);
     if (!calendar) {
       return res.status(404).json({ error: 'Calendar not found' });
     }
 
-    // Use icsSyncService which syncs to both database AND Google Calendar
-    const result = await icsSyncService.syncCalendar(req.params.id);
-    res.json({
+    // Create lock promise and store it
+    console.log(`[POST /calendars/${calendarId}/sync] Starting sync, creating lock`);
+    const syncPromise = icsSyncService.syncCalendar(calendarId);
+    syncLocks.set(calendarId, syncPromise);
+
+    // Execute sync
+    const result = await syncPromise;
+
+    console.log(`[POST /calendars/${calendarId}/sync] Sync completed successfully`);
+    return res.json({
       message: 'Sync completed',
       created: result.eventsAdded,
       updated: result.eventsUpdated,
       deleted: result.eventsDeleted,
     });
   } catch (error: any) {
-    console.error('Sync calendar error:', error);
-    res.status(500).json({ error: error.message || 'Failed to sync calendar' });
+    console.error(`[POST /calendars/${calendarId}/sync] Sync error:`, error);
+    return res.status(500).json({ error: error.message || 'Failed to sync calendar' });
+  } finally {
+    // Always clean up lock, even if sync failed
+    console.log(`[POST /calendars/${calendarId}/sync] Removing lock`);
+    syncLocks.delete(calendarId);
   }
 });
 
