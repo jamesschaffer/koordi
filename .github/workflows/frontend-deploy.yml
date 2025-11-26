@@ -37,6 +37,28 @@ jobs:
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev
 
+      - name: Build and Validate Frontend
+        run: |
+          cd frontend
+          echo "📦 Installing dependencies..."
+          npm ci
+
+          echo "🔨 Building frontend..."
+          npm run build
+
+          echo "✅ Verifying build output..."
+          if [ ! -f dist/index.html ]; then
+            echo "❌ Build failed - no index.html generated"
+            exit 1
+          fi
+
+          if [ ! -d dist/assets ]; then
+            echo "❌ Build failed - no assets directory"
+            exit 1
+          fi
+
+          echo "✅ Build validation passed"
+
       - name: Build and push Docker image
         run: |
           cd frontend
@@ -57,17 +79,50 @@ jobs:
             --allow-unauthenticated \
             --quiet
 
-      - name: Health Check
+      - name: Smoke Test Frontend
         run: |
-          echo "Waiting for service to be ready..."
-          sleep 5
-          HEALTH_URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} --region=${{ env.REGION }} --format='value(status.url)')
-          if curl -f -s "$HEALTH_URL" > /dev/null; then
-            echo "✅ Health check passed"
+          echo "⏳ Waiting for service to be ready..."
+          sleep 10
+
+          FRONTEND_URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} --region=${{ env.REGION }} --format='value(status.url)')
+          echo "🔍 Testing: $FRONTEND_URL"
+
+          # Fetch the page
+          RESPONSE=$(curl -s "$FRONTEND_URL")
+
+          # Check for root element
+          if echo "$RESPONSE" | grep -q 'id="root"'; then
+            echo "✅ Root element present"
           else
-            echo "❌ Health check failed"
+            echo "❌ Root element missing - app may not load"
             exit 1
           fi
+
+          # Check if JavaScript bundle is referenced
+          JS_FILE=$(echo "$RESPONSE" | grep -oP 'src="/assets/index-[^"]+\.js"' | head -1 | tr -d 'src="')
+          if [ -n "$JS_FILE" ]; then
+            echo "📦 JavaScript bundle: $JS_FILE"
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$FRONTEND_URL$JS_FILE")
+            if [ "$HTTP_CODE" -eq 200 ]; then
+              echo "✅ JavaScript bundle loads successfully"
+            else
+              echo "❌ JavaScript bundle returned HTTP $HTTP_CODE"
+              exit 1
+            fi
+          else
+            echo "⚠️  Warning: Could not find JavaScript bundle reference"
+          fi
+
+          # Check if CSS is referenced
+          CSS_FILE=$(echo "$RESPONSE" | grep -oP 'href="/assets/index-[^"]+\.css"' | head -1 | tr -d 'href="')
+          if [ -n "$CSS_FILE" ]; then
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$FRONTEND_URL$CSS_FILE")
+            if [ "$HTTP_CODE" -eq 200 ]; then
+              echo "✅ CSS loads successfully"
+            fi
+          fi
+
+          echo "✅ Frontend smoke test passed"
 
       - name: Show deployment URL
         run: |
@@ -75,3 +130,22 @@ jobs:
           gcloud run services describe ${{ env.SERVICE_NAME }} \
             --region=${{ env.REGION }} \
             --format='value(status.url)'
+
+      - name: Notify on Failure
+        if: failure()
+        run: |
+          echo "=========================================="
+          echo "❌ FRONTEND DEPLOYMENT FAILED"
+          echo "=========================================="
+          echo ""
+          echo "Commit: ${{ github.sha }}"
+          echo "Author: ${{ github.actor }}"
+          echo "Message: ${{ github.event.head_commit.message }}"
+          echo ""
+          echo "View logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          echo ""
+          echo "This failure has been logged. Check your email for GitHub Actions notifications."
+          echo "To enable email notifications:"
+          echo "  1. Go to https://github.com/settings/notifications"
+          echo "  2. Enable 'Actions' under 'Email notification preferences'"
+          echo ""

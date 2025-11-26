@@ -37,6 +37,28 @@ jobs:
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev
 
+      - name: Build and Validate Backend
+        run: |
+          cd backend
+          echo "📦 Installing dependencies..."
+          npm ci
+
+          echo "🔨 Building backend..."
+          npm run build
+
+          echo "✅ Verifying build output..."
+          if [ ! -d dist ]; then
+            echo "❌ Build failed - no dist directory"
+            exit 1
+          fi
+
+          if [ ! -f dist/index.js ]; then
+            echo "❌ Build failed - no index.js generated"
+            exit 1
+          fi
+
+          echo "✅ Build validation passed"
+
       - name: Build and push Docker image
         run: |
           cd backend
@@ -97,9 +119,54 @@ jobs:
             exit 1
           fi
 
+      - name: Smoke Test API Endpoints
+        run: |
+          BACKEND_URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} --region=${{ env.REGION }} --format='value(status.url)')
+          echo "🔍 Testing API endpoints at: $BACKEND_URL"
+
+          # Test /api root endpoint
+          API_RESPONSE=$(curl -s "$BACKEND_URL/api")
+          if echo "$API_RESPONSE" | grep -q '"message":"Koordie API"'; then
+            echo "✅ API root endpoint responding correctly"
+          else
+            echo "❌ API root endpoint returned unexpected response:"
+            echo "$API_RESPONSE"
+            exit 1
+          fi
+
+          # Test /api/health (already tested above, but verify structure)
+          HEALTH_STATUS=$(echo "$HEALTH_BODY" | jq -r '.status')
+          if [ "$HEALTH_STATUS" = "healthy" ] || [ "$HEALTH_STATUS" = "degraded" ]; then
+            echo "✅ Health endpoint returns valid structure"
+          else
+            echo "❌ Health endpoint structure invalid"
+            exit 1
+          fi
+
+          echo "✅ Backend smoke tests passed"
+
       - name: Show deployment URL
         run: |
           echo "Backend deployed successfully!"
           gcloud run services describe ${{ env.SERVICE_NAME }} \
             --region=${{ env.REGION }} \
             --format='value(status.url)'
+
+      - name: Notify on Failure
+        if: failure()
+        run: |
+          echo "=========================================="
+          echo "❌ BACKEND DEPLOYMENT FAILED"
+          echo "=========================================="
+          echo ""
+          echo "Commit: ${{ github.sha }}"
+          echo "Author: ${{ github.actor }}"
+          echo "Message: ${{ github.event.head_commit.message }}"
+          echo ""
+          echo "View logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          echo ""
+          echo "This failure has been logged. Check your email for GitHub Actions notifications."
+          echo "To enable email notifications:"
+          echo "  1. Go to https://github.com/settings/notifications"
+          echo "  2. Enable 'Actions' under 'Email notification preferences'"
+          echo ""
