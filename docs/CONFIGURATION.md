@@ -201,7 +201,7 @@ GOOGLE_CLIENT_SECRET="GOCSPX-abc123def456ghi789"
 GOOGLE_REDIRECT_URI="http://localhost:3000/api/auth/google/callback"
 
 # Production
-GOOGLE_REDIRECT_URI="https://api.koordi.app/api/auth/google/callback"
+GOOGLE_REDIRECT_URI="https://api.koordie.com/api/auth/google/callback"
 ```
 
 **Requirements:**
@@ -270,7 +270,7 @@ Server port for Express.js backend.
 FRONTEND_URL=http://localhost:5173
 
 # Production
-FRONTEND_URL=https://koordi.app
+FRONTEND_URL=https://app.koordie.com
 ```
 
 Used for CORS configuration and OAuth redirects.
@@ -396,11 +396,14 @@ Rate limiting is implemented for invitation routes only, with hardcoded values:
 ```typescript
 // src/middleware/invitationRateLimiter.ts
 const invitationRateLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 10, // limit each IP to 10 requests per windowMs
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 10, // limit each calendar to 10 invitations per hour
+  keyGenerator: (req) => `calendar-${req.params.calendarId}`, // Per-calendar, not per-IP
   // ... skipped in test environment
 });
 ```
+
+**Note:** Rate limiting is per-calendar, not per-IP or per-user.
 
 There are no environment variables for rate limiting configuration.
 
@@ -491,14 +494,14 @@ SENTRY_DSN="<staging-sentry-dsn>"
 NODE_ENV=production
 PORT=3000
 DATABASE_URL="<from-secrets-manager>"
-FRONTEND_URL=https://koordi.app
+FRONTEND_URL=https://app.koordie.com
 
 JWT_SECRET="<from-secrets-manager>"
 ENCRYPTION_KEY="<from-secrets-manager>"
 
 GOOGLE_CLIENT_ID="<from-secrets-manager>"
 GOOGLE_CLIENT_SECRET="<from-secrets-manager>"
-GOOGLE_REDIRECT_URI="https://api.koordi.app/api/auth/google/callback"
+GOOGLE_REDIRECT_URI="https://api.koordie.com/api/auth/google/callback"
 GOOGLE_MAPS_API_KEY="<from-secrets-manager>"
 
 REDIS_URL="<from-secrets-manager>"
@@ -552,10 +555,10 @@ Navigate to **APIs & Services > Library**, enable:
 3. **Name:** "Koordi Web App"
 4. **Authorized JavaScript origins:**
    - `http://localhost:3000` (development)
-   - `https://api.koordi.app` (production)
+   - `https://api.koordie.com` (production)
 5. **Authorized redirect URIs:**
    - `http://localhost:3000/api/auth/google/callback` (development)
-   - `https://api.koordi.app/api/auth/google/callback` (production)
+   - `https://api.koordie.com/api/auth/google/callback` (production)
 6. Click **Create**
 7. Copy **Client ID** → `GOOGLE_CLIENT_ID`
 8. Copy **Client Secret** → `GOOGLE_CLIENT_SECRET`
@@ -584,7 +587,7 @@ Navigate to **APIs & Services > Library**, enable:
      - Directions API
      - Distance Matrix API
    - **Application restrictions (optional):**
-     - HTTP referrers: `https://koordi.app/*`
+     - HTTP referrers: `https://app.koordie.com/*`
      - IP addresses: Your server IPs
 
 #### Step 6: Set Up Billing
@@ -779,21 +782,54 @@ if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
 
 ### Health Check Endpoint
 
-A basic health check endpoint is available:
+A comprehensive health check endpoint is available at `GET /api/health`:
 
 ```typescript
 // src/index.ts
-app.get('/api/health', (req, res) => {
-  res.json({
-    status: 'ok',
+app.get('/api/health', async (req, res) => {
+  const checks = {};
+  let allHealthy = true;
+
+  // Check critical environment variables
+  const requiredEnvVars = ['DATABASE_URL', 'JWT_SECRET', 'ENCRYPTION_KEY', 'REDIS_URL'];
+  requiredEnvVars.forEach((varName) => {
+    checks[varName.toLowerCase()] = process.env[varName]
+      ? { status: 'ok' }
+      : { status: 'error', message: 'Not configured' };
+  });
+
+  // Check email configuration (warning, not critical)
+  const emailConfigured = ['SMTP_HOST', 'SMTP_USER', 'SMTP_PASS', 'EMAIL_FROM']
+    .every((v) => process.env[v]);
+  checks.email = emailConfigured
+    ? { status: 'ok', message: 'SMTP configured' }
+    : { status: 'warning', message: 'SMTP not fully configured - emails will be logged to console' };
+
+  // Quick database connectivity check
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    checks.database = { status: 'ok', message: 'Connected' };
+  } catch (error) {
+    checks.database = { status: 'error', message: error.message };
+    allHealthy = false;
+  }
+
+  res.status(allHealthy ? 200 : 503).json({
+    status: allHealthy ? 'healthy' : 'degraded',
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
     environment: process.env.NODE_ENV || 'development',
+    checks,
   });
 });
 ```
 
-**Note:** This endpoint does not verify database, Redis, or external API connectivity.
+**Verified checks:**
+- Required environment variables: DATABASE_URL, JWT_SECRET, ENCRYPTION_KEY, REDIS_URL
+- Email configuration (warning if not configured)
+- **Database connectivity** (executes `SELECT 1`)
+
+**Not verified:** Redis connectivity, Google API access
 
 ---
 
@@ -818,16 +854,16 @@ app.get('/api/health', (req, res) => {
 - [x] Environment variable loading via `dotenv`
 - [x] ENCRYPTION_KEY validation at module load
 - [x] Google OAuth credential validation at runtime
-- [x] Basic health check endpoint (`/api/health`)
+- [x] Comprehensive health check endpoint (`/api/health`) with database connectivity test
 - [x] CORS configuration via `FRONTEND_URL`
 - [x] WebSocket on same server as HTTP API
 - [x] Email (optional, via SMTP_* variables)
-- [x] Rate limiting for invitation routes (hardcoded values)
+- [x] Rate limiting for invitation routes (10/hour per calendar, hardcoded)
 
 ### Not Yet Implemented
 - [ ] Centralized config object (variables accessed directly via `process.env`)
 - [ ] Joi-based configuration validation
-- [ ] Startup health checks (database, Redis, Google APIs)
+- [ ] Startup health checks for Redis and Google APIs (database is checked via `/api/health`)
 - [ ] Configurable background job intervals
 - [ ] Configurable rate limiting variables
 - [ ] Structured logging with configurable levels

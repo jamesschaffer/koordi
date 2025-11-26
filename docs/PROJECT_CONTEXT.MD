@@ -205,24 +205,25 @@ Represents a parent/caregiver account in the system.
 **Fields:**
 - `id` (UUID, Primary Key)
 - `email` (String, Unique, Required)
-- `google_id` (String, Unique, Required) - Google OAuth identifier
 - `name` (String, Required)
-- `profile_photo_url` (String, Nullable)
-- `google_calendar_id` (String, Required) - User's primary Google Calendar ID
-- `google_access_token` (String, Encrypted, Required)
-- `google_refresh_token` (String, Encrypted, Required)
-- `google_token_expires_at` (Timestamp, Required)
-- `default_home_address` (String, Required) - For drive time calculations
-- `default_home_latitude` (Decimal, Required)
-- `default_home_longitude` (Decimal, Required)
-- `comfort_buffer_minutes` (Integer, Default: 5) - Extra time added to departure calculations
-- `supplemental_event_retention_on_reassign` (Boolean, Default: false) - Settings preference
+- `avatar_url` (String, Nullable) - Profile photo URL
+- `google_refresh_token_enc` (String, Encrypted, Nullable) - Encrypted Google refresh token
+- `google_calendar_id` (String, Nullable) - User's primary Google Calendar ID
+- `google_calendar_sync_enabled` (Boolean, Default: false) - Whether Google Calendar sync is enabled
+- `home_address` (String, Nullable) - For drive time calculations
+- `home_latitude` (Decimal, Nullable)
+- `home_longitude` (Decimal, Nullable)
+- `comfort_buffer_minutes` (Integer, Default: 5) - Extra time added to departure calculations (0-60 minutes)
+- `keep_supplemental_events` (Boolean, Default: false) - Keep drive times on reassignment
 - `created_at` (Timestamp)
 - `updated_at` (Timestamp)
 
 **Relationships:**
+- Owns many Event Calendars (as owner)
 - Has many Event Calendar Memberships
 - Has many Event Assignments (assigned events)
+- Has many sent invitations
+- Has many UserGoogleEventSync records
 
 ---
 
@@ -256,12 +257,13 @@ Represents a single ICS feed source associated with one child (e.g., "Xander's S
 - `owner_id` (UUID, Foreign Key → User, Required) - Parent who added this calendar
 - `name` (String, Required) - E.g., "Soccer - Spring 2024"
 - `ics_url` (String, Required) - Public ICS feed URL
-- `ics_feed_name` (String, Nullable) - Original calendar name from ICS
-- `color` (String, Default: system-assigned) - Visual identification color
+- `color` (String, Default: "#3B82F6") - Hex color for visual identification
 - `sync_enabled` (Boolean, Default: true)
-- `last_synced_at` (Timestamp, Nullable)
-- `last_sync_status` (Enum: success, failed, pending, Default: pending)
+- `last_sync_at` (Timestamp, Nullable)
+- `last_sync_status` (String, Default: "pending") - pending, success, error
 - `last_sync_error` (String, Nullable)
+- `google_calendar_watch_token` (String, Nullable) - Watch API token
+- `google_calendar_watch_expiry` (Timestamp, Nullable)
 - `created_at` (Timestamp)
 - `updated_at` (Timestamp)
 
@@ -280,26 +282,32 @@ Represents a single ICS feed source associated with one child (e.g., "Xander's S
 ---
 
 #### 4. Event Calendar Membership
-Join table representing parent access to an Event Calendar.
+Join table representing parent access to an Event Calendar (invitation system).
 
 **Fields:**
 - `id` (UUID, Primary Key)
 - `event_calendar_id` (UUID, Foreign Key → Event Calendar, Required)
-- `user_id` (UUID, Foreign Key → User, Required)
-- `invited_by_id` (UUID, Foreign Key → User, Nullable) - Who sent the invitation
-- `invitation_status` (Enum: pending, accepted, declined, Default: accepted)
-- `joined_at` (Timestamp)
+- `user_id` (UUID, Foreign Key → User, Nullable) - Null until invitation accepted
+- `invited_email` (String, Required) - Email address of invitee
+- `invitation_token` (String, Unique, Required) - Token for invitation link
+- `status` (String, Default: "pending") - pending, accepted, declined
+- `invited_by_user_id` (UUID, Foreign Key → User, Required) - Who sent the invitation
+- `invited_at` (Timestamp)
+- `responded_at` (Timestamp, Nullable)
+- `expires_at` (Timestamp, Nullable) - Invitations expire after 30 days
 - `created_at` (Timestamp)
+- `updated_at` (Timestamp)
 
 **Relationships:**
 - Belongs to one Event Calendar
-- Belongs to one User (the member)
+- Belongs to one User (the member, once accepted)
 - References one User (who invited them)
 
 **Business Rules:**
 - Owner automatically becomes a member
 - All members have equal access to events (except deletion rights)
 - Members see events filtered by their memberships
+- Unique constraint on (event_calendar_id, user_id) to prevent duplicate memberships
 
 ---
 
@@ -309,76 +317,70 @@ Represents the main event synced from an ICS feed.
 **Fields:**
 - `id` (UUID, Primary Key)
 - `event_calendar_id` (UUID, Foreign Key → Event Calendar, Required)
-- `child_id` (UUID, Foreign Key → Child, Required) - Inherited from Event Calendar
-- `assigned_to_user_id` (UUID, Foreign Key → User, Nullable) - Which parent is responsible
-- `ics_event_uid` (String, Required) - Unique identifier from ICS feed
+- `ics_uid` (String, Required) - Original ICS UID for idempotency
 - `title` (String, Required)
 - `description` (Text, Nullable) - Raw description from ICS
-- `location_address` (String, Nullable)
-- `location_latitude` (Decimal, Nullable)
-- `location_longitude` (Decimal, Nullable)
+- `location` (String, Nullable) - Location text
+- `location_lat` (Decimal, Nullable)
+- `location_lng` (Decimal, Nullable)
 - `start_time` (Timestamp, Required)
 - `end_time` (Timestamp, Required)
-- `all_day` (Boolean, Default: false)
-- `early_arrival_minutes` (Integer, Default: 0) - Parsed or manually set
-- `parsed_instructions` (Text, Nullable) - Extracted special instructions
-- `parsed_items_to_bring` (Text, Nullable) - Extracted items
-- `google_calendar_event_id` (String, Nullable) - Main event in all parents' Google Calendars
-- `synced_to_google` (Boolean, Default: false)
-- `last_modified_in_ics` (Timestamp, Required) - From ICS feed
+- `is_all_day` (Boolean, Default: false)
+- `assigned_to_user_id` (UUID, Foreign Key → User, Nullable) - Which parent is responsible
+- `version` (Integer, Default: 1) - Optimistic locking: increments on each assignment change
+- `last_modified` (Timestamp, Default: now) - From ICS or update timestamp
 - `created_at` (Timestamp)
 - `updated_at` (Timestamp)
 
 **Relationships:**
 - Belongs to one Event Calendar
-- Belongs to one Child
 - Assigned to one User (optional)
 - Has many Supplemental Events
+- Has many UserGoogleEventSync records
 
 **Business Rules:**
 - Assignment preserved during ICS updates (unless event deleted)
-- Main event syncs to ALL parent members' Google Calendars
-- Child inherited from Event Calendar (immutable)
+- Main event syncs to ALL parent members' Google Calendars (via UserGoogleEventSync)
+- Child accessed via Event Calendar relationship
 - If unassigned, appears in "Unassigned" tab for all members
+- Unique constraint on (event_calendar_id, ics_uid) prevents duplicate imports
 
 ---
 
 #### 6. Supplemental Event
-Represents drive time events (departure and return) that are children of main events. These inherit properties from their parent event and are automatically created/transferred when the main event is assigned.
+Represents system-generated drive time events (departure, buffer, and return trips) that are children of main events.
 
 **Fields:**
 - `id` (UUID, Primary Key)
-- `main_event_id` (UUID, Foreign Key → Event, Required)
-- `assigned_to_user_id` (UUID, Foreign Key → User, Required) - Inherited from main event assignment
-- `event_type` (Enum: departure, return, Required)
+- `parent_event_id` (UUID, Foreign Key → Event, Required)
+- `type` (String, Required) - 'departure', 'buffer', or 'return'
 - `title` (String, Required) - E.g., "Leave for Soccer Practice"
 - `start_time` (Timestamp, Required) - Calculated departure/return time
-- `duration_minutes` (Integer, Required) - Calculated drive time
-- `starting_address` (String, Required) - User's home or previous event location
-- `starting_latitude` (Decimal, Required)
-- `starting_longitude` (Decimal, Required)
+- `end_time` (Timestamp, Required)
+- `origin_address` (String, Required) - User's home or previous event location
+- `origin_lat` (Decimal, Required)
+- `origin_lng` (Decimal, Required)
 - `destination_address` (String, Required)
-- `destination_latitude` (Decimal, Required)
-- `destination_longitude` (Decimal, Required)
-- `google_calendar_event_id` (String, Nullable) - Only in assigned parent's Google Calendar
-- `synced_to_google` (Boolean, Default: false)
-- `traffic_calculated_at` (Timestamp, Nullable) - Last time traffic data was fetched
+- `destination_lat` (Decimal, Required)
+- `destination_lng` (Decimal, Required)
+- `drive_time_minutes` (Integer, Required) - Raw drive time from Google Maps (0 for buffer events)
+- `last_traffic_check` (Timestamp, Nullable) - Last time traffic data was fetched
 - `created_at` (Timestamp)
 - `updated_at` (Timestamp)
 
 **Relationships:**
-- Child of one Event (main event) - inherits properties
-- Assigned to one User (inherited from main event)
+- Child of one Event (parent event)
+- Has many UserGoogleEventSync records
 
 **Business Rules:**
 - Created automatically when main event is assigned to a parent
-- Inherits child, location, and timing from main event
-- Syncs only to assigned parent's Google Calendar (not all parents)
+- Inherits timing from main event
+- Syncs only to assigned parent's Google Calendar (via UserGoogleEventSync)
 - When main event is reassigned from Parent A to Parent B:
   - New supplemental events automatically created for Parent B (always)
   - Parent A's supplemental events behavior based on user preference:
-    - If `supplemental_event_retention_on_reassign = false`: Delete Parent A's supplemental events
-    - If `supplemental_event_retention_on_reassign = true`: Keep Parent A's supplemental events
+    - If `keep_supplemental_events = false`: Delete Parent A's supplemental events
+    - If `keep_supplemental_events = true`: Keep Parent A's supplemental events
 - Recalculated when:
   - Traffic conditions change significantly
   - Assigned user's home address changes
@@ -387,18 +389,44 @@ Represents drive time events (departure and return) that are children of main ev
 
 ---
 
+#### 7. UserGoogleEventSync
+Tracks which events and supplemental events are synced to which users' Google Calendars. Supports multi-user event visibility.
+
+**Fields:**
+- `id` (UUID, Primary Key)
+- `user_id` (UUID, Foreign Key → User, Required)
+- `event_id` (UUID, Foreign Key → Event, Nullable)
+- `supplemental_event_id` (UUID, Foreign Key → Supplemental Event, Nullable)
+- `google_event_id` (String, Required) - Google Calendar event ID for this user
+- `sync_type` (String, Required) - 'main' or 'supplemental'
+- `created_at` (Timestamp)
+- `updated_at` (Timestamp)
+
+**Relationships:**
+- Belongs to one User
+- References one Event (optional)
+- References one Supplemental Event (optional)
+
+**Business Rules:**
+- Main events can be synced to multiple users (all calendar members)
+- Supplemental events are synced only to the assigned user
+- Unique constraint on (user_id, event_id) and (user_id, supplemental_event_id)
+- When event is deleted, corresponding sync records are cascade deleted
+
+---
+
 ### Entity Relationships Diagram (Text Format)
 
 ```
 User (Parent)
- ├─→ Has many Event Calendar Memberships
  ├─→ Owns many Event Calendars (as owner)
+ ├─→ Has many Event Calendar Memberships
  ├─→ Assigned to many Events
- └─→ Assigned to many Supplemental Events
+ ├─→ Has sent many Invitations
+ └─→ Has many UserGoogleEventSync records
 
 Child
- ├─→ Has many Event Calendars
- └─→ Has many Events
+ └─→ Has many Event Calendars
 
 Event Calendar
  ├─→ Belongs to one Child
@@ -406,19 +434,25 @@ Event Calendar
  ├─→ Has many Event Calendar Memberships (shared with parents)
  └─→ Has many Events
 
-Event Calendar Membership (Join Table)
+Event Calendar Membership (Invitation System)
  ├─→ Belongs to one Event Calendar
- └─→ Belongs to one User
+ ├─→ Belongs to one User (once accepted, nullable until then)
+ └─→ References one User (invited_by)
 
 Event (Main Event)
  ├─→ Belongs to one Event Calendar
- ├─→ Belongs to one Child (inherited)
  ├─→ Assigned to one User (optional)
- └─→ Has many Supplemental Events (0, 1, or 2)
+ ├─→ Has many Supplemental Events (departure, buffer, return)
+ └─→ Has many UserGoogleEventSync records
 
 Supplemental Event (Drive Time)
- ├─→ Belongs to one Event (main event)
- └─→ Assigned to one User (same as main event)
+ ├─→ Belongs to one Event (parent event)
+ └─→ Has many UserGoogleEventSync records
+
+UserGoogleEventSync (Google Calendar Tracking)
+ ├─→ Belongs to one User
+ ├─→ References one Event (optional)
+ └─→ References one Supplemental Event (optional)
 ```
 
 ---
@@ -426,31 +460,61 @@ Supplemental Event (Drive Time)
 ### Key Indexes
 
 **Performance-critical indexes:**
-- `User.email` (unique)
-- `User.google_id` (unique)
-- `Event_Calendar.ics_url` (for duplicate detection)
-- `Event.event_calendar_id, Event.start_time` (for calendar queries)
-- `Event.assigned_to_user_id, Event.start_time` (for "My Events" tab)
-- `Event.ics_event_uid` (for sync detection)
-- `Event_Calendar_Membership.user_id` (for access control queries)
-- `Supplemental_Event.main_event_id` (for cascade operations)
+
+**User:**
+- `email` (unique)
+
+**EventCalendar:**
+- `child_id` (frequent joins)
+- `owner_id` (ownership queries)
+- `ics_url` (sync job lookups)
+- `last_sync_at` (sync scheduling)
+
+**EventCalendarMembership:**
+- `event_calendar_id` (membership lookups)
+- `user_id` (user's calendars queries)
+- `invited_email` (invitation lookups)
+- `invitation_token` (unique token validation)
+- `status` (pending invitations queries)
+- Unique constraint on `(event_calendar_id, user_id)`
+
+**Event:**
+- Unique constraint on `(event_calendar_id, ics_uid)` (idempotency)
+- `event_calendar_id` (calendar's events)
+- `assigned_to_user_id` (user's assigned events)
+- `start_time`, `end_time` (date range queries for dashboard)
+
+**SupplementalEvent:**
+- `parent_event_id` (cascade deletions)
+- `type` (departure/buffer/return filtering)
+- `start_time` (dashboard queries)
+
+**UserGoogleEventSync:**
+- `user_id`
+- `event_id`
+- `supplemental_event_id`
+- `google_event_id`
+- Composite: `(event_id, sync_type)`, `(supplemental_event_id, sync_type)`, `(user_id, sync_type)`
+- Unique constraints: `(user_id, event_id)`, `(user_id, supplemental_event_id)`
 
 ---
 
 ### Data Integrity Constraints
 
 1. **Cascade Deletes:**
-   - Delete Event Calendar → Delete all Events → Delete all Supplemental Events
-   - Delete Event → Delete all Supplemental Events
-   - Delete Child → Blocked if Event Calendars exist
+   - Delete User → Cascade: owned Event Calendars, Event Calendar Memberships; SetNull: assigned Events
+   - Delete Child → Cascade: Event Calendars
+   - Delete Event Calendar → Cascade: Members, Events
+   - Delete Event → Cascade: Supplemental Events, UserGoogleEventSync records
+   - Delete Supplemental Event → Cascade: UserGoogleEventSync records
 
 2. **Assignment Integrity:**
    - Event can only be assigned to User who is a member of the Event Calendar
-   - Supplemental Event `assigned_to_user_id` must match Main Event `assigned_to_user_id`
+   - Assignment changes increment Event.version for optimistic locking
 
 3. **Sync Integrity:**
-   - `Event.ics_event_uid` must be unique within an Event Calendar
-   - `Event.child_id` must match `Event_Calendar.child_id`
+   - `Event.ics_uid` must be unique within an Event Calendar (unique constraint)
+   - Child relationship accessed via Event Calendar (not stored directly on Event)
 
 ---
 
@@ -472,9 +536,9 @@ Supplemental Event (Drive Time)
 ### Frontend Stack
 
 #### Core Framework
-- **Primary:** React 18+ with TypeScript
+- **Primary:** React 19 with TypeScript
 - **State Management:** React Context + TanStack Query (React Query) for server state
-- **Routing:** React Router v6
+- **Routing:** React Router v7
 - **UI Components:** shadcn/ui (Radix UI primitives + Tailwind CSS)
 - **Styling:** Tailwind CSS for responsive, mobile-first design
 
@@ -543,13 +607,12 @@ Supplemental Event (Drive Time)
   - Native UUID support
 
 #### Background Jobs & Scheduling
-- **Bull Queue** (Redis-backed job queue)
+- **node-cron** for scheduling periodic tasks
+- **Bull Queue** (Redis-backed job queue) for job processing
 - **Job Types:**
-  - ICS feed synchronization (every 15 minutes per calendar)
+  - ICS feed synchronization (every 15 minutes for all calendars)
   - Google Calendar sync (on-demand and scheduled)
-  - Traffic recalculation for upcoming events
-  - Push notification delivery
-  - Subscription validation (daily)
+  - Expired invitation cleanup (daily at 2 AM)
 
 #### Caching Layer
 - **Redis 7+**
@@ -567,20 +630,21 @@ Supplemental Event (Drive Time)
 
 #### Authentication
 - **Google OAuth 2.0**
-- **Library:** `google-auth-library` (Node.js)
+- **Library:** `googleapis` (Node.js)
 - **Scopes Required:**
-  - `https://www.googleapis.com/auth/calendar` - Read/write calendar events
-  - `https://www.googleapis.com/auth/calendar.events` - Event management
   - `https://www.googleapis.com/auth/userinfo.email` - User identification
   - `https://www.googleapis.com/auth/userinfo.profile` - User profile data
+  - `https://www.googleapis.com/auth/calendar` - Read/write calendar access
+  - `https://www.googleapis.com/auth/calendar.events` - Event management
 - **Token Management:**
-  - Access tokens stored encrypted in PostgreSQL
-  - Automatic refresh token rotation
+  - Refresh tokens stored encrypted in PostgreSQL (google_refresh_token_enc)
+  - Always uses `prompt='consent'` to ensure refresh token is received
+  - Access tokens generated on-demand from refresh token
   - Graceful handling of revoked access
 
 #### Calendar Integration
 - **Google Calendar API v3**
-- **ICS Parsing:** `ical.js` library
+- **ICS Parsing:** `ical.js` and `node-ical` libraries
 - **Features:**
   - Create/update/delete events in user calendars
   - Watch API for real-time Google Calendar changes (webhook)
@@ -630,19 +694,30 @@ Supplemental Event (Drive Time)
 ### Infrastructure & DevOps
 
 #### Hosting
-- **Frontend:** Vercel or Netlify (auto-deployment, CDN, edge caching)
-- **Backend:** Railway, Render, or AWS ECS (containerized)
-- **Database:** Managed PostgreSQL (Railway, Render, or AWS RDS)
-- **Redis:** Managed Redis (Railway, Render, or AWS ElastiCache)
+- **Platform:** Google Cloud Platform (GCP)
+- **Frontend:** Google Cloud Run (containerized, auto-scaling)
+  - Service: koordie-frontend
+  - URL: https://app.koordie.com
+- **Backend:** Google Cloud Run (containerized, auto-scaling)
+  - Service: koordie-backend
+  - URL: https://api.koordie.com
+- **Container Registry:** Google Artifact Registry (us-central1)
+- **Database:** PostgreSQL (Cloud SQL or external)
+- **Redis:** Managed Redis
 
 #### CI/CD
 - **GitHub Actions**
 - **Workflows:**
-  - Automated testing on PR
-  - Type checking (TypeScript)
-  - Linting (ESLint + Prettier)
-  - Build and deploy to staging
-  - Production deployment on merge to main
+  - `backend-deploy.yml` - Deploys backend on push to main (backend/** changes)
+  - `frontend-deploy.yml` - Deploys frontend on push to main (frontend/** changes)
+  - `marketing-site-deploy.yml` - Deploys marketing site
+- **Pipeline Steps:**
+  - Validate required secrets
+  - Build and validate TypeScript
+  - Build Docker image
+  - Push to Artifact Registry
+  - Deploy to Cloud Run
+  - Health checks and smoke tests
 
 #### Monitoring & Logging
 - **Application Monitoring:** Sentry (error tracking)
@@ -661,16 +736,21 @@ Supplemental Event (Drive Time)
 - **lint-staged** (run linters on staged files only)
 
 #### Testing
-- **Unit Tests:** Vitest (fast, compatible with Vite)
+- **Unit Tests:** Vitest (fast, compatible with Vite) - Backend and Frontend
 - **Integration Tests:** Supertest (API testing)
-- **E2E Tests:** Playwright (cross-browser, mobile viewports)
-- **API Testing:** Postman collections for manual testing
+- **E2E Tests:** Playwright (frontend)
+- **Test Commands:**
+  - Backend: `npm test` (Vitest)
+  - Frontend: `npm test` (Vitest), `npm run test:e2e` (Playwright)
 
 #### Local Development
-- **Frontend Dev Server:** Vite (fast HMR, optimized builds)
-- **Backend Dev Server:** tsx-watch (TypeScript execution with auto-reload)
+- **Frontend Dev Server:** Vite 7 (fast HMR, optimized builds)
+- **Backend Dev Server:** nodemon with ts-node (TypeScript execution with auto-reload)
 - **Database Migrations:** Prisma Migrate
-- **Docker Compose:** Local PostgreSQL + Redis setup
+- **Dev Commands:**
+  - Frontend: `npm run dev` (Vite dev server on port 5173)
+  - Backend: `npm run dev` (nodemon on port 3000)
+  - Prisma Studio: `npm run prisma:studio`
 
 ---
 

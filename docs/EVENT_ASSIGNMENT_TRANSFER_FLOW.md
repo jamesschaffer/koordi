@@ -260,7 +260,7 @@ This document defines how parents transfer event assignments between each other,
 **System Actions:**
 
 1. **Update Database:**
-   - `event.assigned_parent_id` = Tom's ID
+   - `event.assigned_to_user_id` = Tom's ID
    - `event.updated_at` = current timestamp
 
 2. **Jennifer's Google Calendar:**
@@ -341,7 +341,7 @@ This document defines how parents transfer event assignments between each other,
 **System Actions:**
 
 1. **Update Database:**
-   - `event.assigned_parent_id` = Jennifer's ID
+   - `event.assigned_to_user_id` = Jennifer's ID
    - `event.updated_at` = current timestamp
 
 2. **Tom's Google Calendar:**
@@ -415,7 +415,7 @@ This document defines how parents transfer event assignments between each other,
 **System Actions:**
 
 1. **Update Database:**
-   - `event.assigned_parent_id` = Jennifer's ID
+   - `event.assigned_to_user_id` = Jennifer's ID
 
 2. **Jennifer's Google Calendar:**
    - **Main Event:** Update description (add assignment and times)
@@ -753,9 +753,9 @@ ASSIGNMENT
 4:30:00.000 - Jennifer: "Take Over" → Sends to server
 4:30:00.100 - Tom: "Take Over" → Sends to server
 4:30:00.200 - Server processes Jennifer's request first
-                Event.assigned_parent_id = Jennifer
+                Event.assigned_to_user_id = Jennifer
 4:30:00.300 - Server processes Tom's request
-                Event.assigned_parent_id = Jennifer (already!)
+                Event.assigned_to_user_id = Jennifer (already!)
                 Tom's request: Changes to Tom
                 Result: Tom gets it (last write wins)
 ```
