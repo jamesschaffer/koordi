@@ -774,7 +774,7 @@ This document provides a comprehensive breakdown of core features in Koordi. Eac
 - Setting saved
 
 **Business Logic:**
-1. Store user preference: `supplemental_event_retention_on_reassign` (boolean)
+1. Store user preference: `keep_supplemental_events` (boolean)
 2. Default value: false (OFF - delete supplemental events)
 3. Setting applies to ALL Event Calendars for this user
 4. Setting takes effect on next reassignment (doesn't retroactively change existing events)

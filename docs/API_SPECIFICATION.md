@@ -2,7 +2,7 @@
 ## Koordi - RESTful API
 
 **Version:** 1.0.0
-**Base URL:** `https://api.koordi.app` (production)
+**Base URL:** `https://api.koordie.com` (production)
 **Base URL:** `http://localhost:3000` (development)
 
 ---
@@ -13,11 +13,13 @@
 2. [Common Patterns](#common-patterns)
 3. [Error Responses](#error-responses)
 4. [API Endpoints](#api-endpoints)
+   - [Utility Endpoints](#utility-endpoints)
    - [Authentication & User](#authentication--user-endpoints)
    - [Event Calendars](#event-calendar-endpoints)
    - [Event Calendar Members](#event-calendar-member-endpoints)
    - [Children](#children-endpoints)
    - [Events](#event-endpoints)
+   - [Background Jobs](#background-job-endpoints)
 
 ---
 
@@ -102,11 +104,63 @@ Some endpoints (e.g., event assignment conflicts) return structured errors:
 - `409` Conflict - Concurrent modification (optimistic locking)
 - `500` Internal Server Error - Server error
 
-**Not Used:** `422`, `429`, `503` (rate limiting minimal, no structured validation errors)
+**Not Used:** `422` (no structured validation errors)
+
+**Note:** `429` is used for invitation rate limiting. `503` is used for degraded health check status.
 
 ---
 
 ## API ENDPOINTS
+
+---
+
+## UTILITY ENDPOINTS
+
+### GET /api
+
+API info endpoint.
+
+**Authentication:** None (public endpoint)
+
+**Response:** `200 OK`
+```json
+{
+  "message": "Koordi API",
+  "version": "1.0.0",
+  "documentation": "/api/docs"
+}
+```
+
+---
+
+### GET /api/health
+
+Health check endpoint for monitoring and load balancers.
+
+**Authentication:** None (public endpoint)
+
+**Response:** `200 OK` (healthy) or `503 Service Unavailable` (degraded)
+```json
+{
+  "status": "healthy",
+  "timestamp": "2024-01-01T00:00:00.000Z",
+  "uptime": 3600.5,
+  "environment": "production",
+  "checks": {
+    "database_url": { "status": "ok" },
+    "jwt_secret": { "status": "ok" },
+    "encryption_key": { "status": "ok" },
+    "redis_url": { "status": "ok" },
+    "email": { "status": "warning", "message": "SMTP not fully configured - emails will be logged to console" },
+    "database": { "status": "ok", "message": "Connected" }
+  }
+}
+```
+
+**Health Check Items:**
+- `database_url`, `jwt_secret`, `encryption_key`, `redis_url`: Critical environment variables
+- `email`: SMTP configuration (warning if not configured, not critical)
+- `database`: Actual database connectivity test
 
 ---
 
@@ -179,6 +233,28 @@ Get current user profile and settings.
 
 **Notes:**
 - Sensitive data (google_refresh_token_enc, home_latitude, home_longitude) excluded from response
+
+---
+
+### POST /api/auth/logout
+
+Logout endpoint (client should remove token).
+
+**Authentication:** Required
+
+**Request Body:** None
+
+**Response:** `200 OK`
+```json
+{
+  "message": "Logged out successfully"
+}
+```
+
+**Notes:**
+- JWT-based auth means logout is handled client-side by removing the token
+- This endpoint exists for API completeness but doesn't invalidate the token server-side
+- No token blacklist is implemented
 
 ---
 
@@ -477,9 +553,11 @@ Manually trigger ICS sync.
 **Notes:**
 - Syncs ICS feed to database AND Google Calendar for all members
 - Runs synchronously (may take time for large calendars)
+- Uses in-memory lock to prevent concurrent syncs for the same calendar
 
 **Errors:**
 - `404` - Calendar not found
+- `409` - Sync already in progress for this calendar (returns `retryAfter: 5`)
 - `500` - Failed to sync calendar
 
 ---
@@ -982,30 +1060,137 @@ Resolve a conflict between two events.
 
 ---
 
+## BACKGROUND JOB ENDPOINTS
+
+These endpoints provide access to the Bull Queue job system for ICS sync operations.
+
+### GET /api/jobs/stats
+
+Get job queue statistics.
+
+**Authentication:** Required
+
+**Response:** `200 OK`
+```json
+{
+  "waiting": 0,
+  "active": 1,
+  "completed": 150,
+  "failed": 2,
+  "delayed": 0,
+  "total": 153
+}
+```
+
+---
+
+### GET /api/jobs/recent
+
+Get recent jobs.
+
+**Authentication:** Required
+
+**Query Parameters:**
+- `limit` (optional) - Number of jobs to return (default: 10)
+
+**Response:** `200 OK`
+```json
+[
+  {
+    "id": "job-123",
+    "data": { "calendarId": "calendar-uuid" },
+    "status": "completed",
+    "timestamp": 1699564800000,
+    "processedOn": 1699564801000,
+    "finishedOn": 1699564805000,
+    "returnvalue": { "eventsAdded": 5, "eventsUpdated": 2, "eventsDeleted": 0 }
+  }
+]
+```
+
+---
+
+### POST /api/jobs/sync/calendar/:calendarId
+
+Manually trigger sync for a specific calendar via job queue.
+
+**Authentication:** Required
+
+**Response:** `200 OK`
+```json
+{
+  "message": "Sync job queued",
+  "jobId": "job-123",
+  "calendarId": "calendar-uuid"
+}
+```
+
+**Notes:**
+- This queues a background job, unlike `POST /api/calendars/:id/sync` which runs synchronously
+- Useful for non-blocking sync operations
+
+---
+
+### POST /api/jobs/sync/all
+
+Manually trigger sync for all calendars.
+
+**Authentication:** Required
+
+**Response:** `200 OK`
+```json
+{
+  "message": "Sync job queued for all calendars",
+  "jobId": "job-456"
+}
+```
+
+---
+
+### GET /api/jobs/:jobId
+
+Get details of a specific job.
+
+**Authentication:** Required
+
+**Response:** `200 OK`
+```json
+{
+  "id": "job-123",
+  "data": { "calendarId": "calendar-uuid" },
+  "status": "completed",
+  "timestamp": 1699564800000,
+  "processedOn": 1699564801000,
+  "finishedOn": 1699564805000,
+  "attemptsMade": 1,
+  "returnvalue": { "eventsAdded": 5, "eventsUpdated": 2, "eventsDeleted": 0 },
+  "failedReason": null
+}
+```
+
+**Errors:**
+- `404` - Job not found
+
+---
+
 ## RATE LIMITS
 
-**Default Rate Limits:**
-- Anonymous: 10 requests/minute
-- Authenticated: 100 requests/minute
-- Burst: 20 requests/second
+**Status:** Only invitation rate limiting is implemented.
 
-**Headers:**
-```http
-X-RateLimit-Limit: 100
-X-RateLimit-Remaining: 95
-X-RateLimit-Reset: 1699564860
-```
+**Invitation Rate Limit:**
+- 10 invitations per calendar per hour
+- Key: per-calendar (not per-user or per-IP)
+- Uses standard `RateLimit-*` headers (not legacy `X-RateLimit-*`)
 
 **Rate Limit Exceeded Response:** `429 Too Many Requests`
 ```json
 {
-  "error": {
-    "code": "RATE_LIMIT_EXCEEDED",
-    "message": "Too many requests. Please try again in 42 seconds.",
-    "retry_after": 42
-  }
+  "error": "Too many invitations sent",
+  "message": "You have reached the maximum number of invitations (10) for this calendar in the last hour. Please try again later."
 }
 ```
+
+**Not Implemented:** General API rate limiting (anonymous/authenticated request limits) is not currently implemented.
 
 ---
 

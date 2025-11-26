@@ -771,9 +771,9 @@ You can assign anyway if Tom has a backup plan.
 ### Pseudocode
 
 ```python
-def detect_conflicts(parent_id):
-    # Get all events assigned to parent with supplemental event times
-    events = get_assigned_events(parent_id)
+def detect_conflicts(user_id):
+    # Get all events assigned to user with supplemental event times
+    events = get_assigned_events(user_id)
     
     # Sort by leave time (start of total commitment)
     events.sort(key=lambda e: e.leave_by_time)

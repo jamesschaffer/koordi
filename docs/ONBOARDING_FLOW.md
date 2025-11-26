@@ -61,87 +61,108 @@ Event Calendar: "Sophie's Daycare"
 
 ## DATA MODEL
 
-### Parent
+> **Note**: The actual database schema uses Prisma ORM. See `backend/prisma/schema.prisma` for authoritative field definitions. This section provides a conceptual overview.
+
+### User (Parent/Caregiver)
 ```
-parent_id (UUID, primary key)
+id (UUID, primary key)
 email (unique, for login)
 name
-google_oauth_token
+google_refresh_token_enc (encrypted refresh token)
 google_calendar_id (which Google Calendar to sync to)
+google_calendar_sync_enabled (boolean)
 home_address (for departure calculations)
-notification_preferences
+home_latitude, home_longitude (coordinates)
+comfort_buffer_minutes (0-60, default 5)
+keep_supplemental_events (boolean, retain drive times on reassignment)
 created_at
 updated_at
 ```
 
 ### Child
 ```
-child_id (UUID, primary key)
+id (UUID, primary key)
 name
+photo_url (optional)
+date_of_birth (optional)
 created_at
 updated_at
 ```
 
 ### Event Calendar
 ```
-event_calendar_id (UUID, primary key)
-owner_parent_id (who added it)
+id (UUID, primary key)
+owner_id (who added it)
 child_id (which kid)
+name ("Emma's Soccer")
 ics_url
-calendar_name ("Emma's Soccer")
+color (hex color code)
+sync_enabled (boolean)
+last_sync_at, last_sync_status, last_sync_error
 created_at
 updated_at
 ```
 
-### Event Calendar Membership (Junction Table)
+### Event Calendar Membership (Junction Table + Invitation)
 ```
-membership_id (UUID, primary key)
+id (UUID, primary key)
 event_calendar_id
-parent_id
-status (invited, active, removed)
-invited_at
-accepted_at
-```
-
-### Invitation
-```
-invitation_id (UUID, primary key)
-event_calendar_id (what they're being invited to)
-inviting_parent_id (who sent it)
-recipient_email
-invitation_token (secure)
+user_id (NULL until invitation accepted)
+invited_email
+invitation_token (secure, unique)
 status (pending, accepted, declined)
+invited_by_user_id (who sent it)
+invited_at
+responded_at
+expires_at (invitations expire after 30 days)
 created_at
+updated_at
 ```
 
 ### Event
 ```
-event_id (UUID, primary key)
+id (UUID, primary key)
 event_calendar_id (source)
-child_id (inherited from Event Calendar)
-assigned_parent_id (NULL = unassigned)
+ics_uid (original ICS UID for idempotency)
+assigned_to_user_id (NULL = unassigned)
 title
 start_time
 end_time
+is_all_day (boolean)
 location
+location_lat, location_lng (coordinates)
 description
-parsed_early_arrival (minutes)
-parsed_special_instructions
-google_event_id (for syncing)
+version (optimistic locking for assignments)
+last_modified
 created_at
 updated_at
 ```
 
-### Event Calendar Sync (Per Parent)
+### Supplemental Event (Drive Times)
 ```
-sync_id (UUID, primary key)
-event_id
-parent_id
-google_calendar_id (target)
+id (UUID, primary key)
+parent_event_id
+type ('departure', 'buffer', 'return')
+title
+start_time, end_time
+origin_address, origin_lat, origin_lng
+destination_address, destination_lat, destination_lng
+drive_time_minutes
+last_traffic_check
+created_at
+updated_at
+```
+
+### User Google Event Sync (Per User)
+```
+id (UUID, primary key)
+user_id
+event_id (nullable)
+supplemental_event_id (nullable)
 google_event_id (Google's ID for this copy)
-sync_status (pending, synced, failed)
-last_synced_at
-sync_error
+sync_type ('main' or 'supplemental')
+created_at
+updated_at
 ```
 
 ---
@@ -169,13 +190,13 @@ sync_error
 **Data Captured:**
 - Email address (from Google)
 - Full name (from Google)
-- Google OAuth token (stored securely)
+- Google refresh token (stored encrypted as `google_refresh_token_enc`)
 - Google Calendar ID (primary calendar by default)
 
 **System Actions:**
-- Create parent record with status "Active"
-- Generate unique parent_id
-- Store OAuth token securely
+- Create User record
+- Generate unique user id
+- Store refresh token securely (encrypted)
 - Default google_calendar_id to primary calendar
 
 **Edge Cases:**
@@ -371,7 +392,7 @@ Subject: [Owner Name] invited you to [Calendar Name] on [App Name]
 
 Hi [Member Name],
 
-[Owner Name] has invited you to access [Calendar Name] for [Child Name] 
+[Owner Name] has invited you to access [Calendar Name] for [Child Name]
 on [App Name].
 
 You'll be able to:
@@ -382,7 +403,7 @@ You'll be able to:
 
 [Join Calendar] (big button with deep link)
 
-This invitation does not expire.
+This invitation expires in 30 days.
 ```
 
 **Confirmation Screen:**
@@ -525,14 +546,14 @@ This invitation does not expire.
 **Data Captured:**
 - Email address (must match invitation)
 - Full name (from Google)
-- Google OAuth token
+- Google refresh token (stored encrypted)
 - Google Calendar ID (primary)
 
 **System Actions:**
-- Create parent record OR load existing if email already in system
-- Generate unique parent_id (if new)
-- Store OAuth token
-- Link parent to invitation
+- Create User record OR load existing if email already in system
+- Generate unique user id (if new)
+- Store refresh token securely (encrypted)
+- Link user to invitation
 
 **Edge Cases:**
 - Email mismatch → Error, must use correct email
@@ -654,7 +675,7 @@ This invitation does not expire.
 **Three Main Tabs:**
 
 #### 1. Unassigned Events
-- Shows events with no assigned_parent_id
+- Shows events with no assigned_to_user_id
 - Filtered by selected child (or all kids)
 - Badge: "Unassigned" on each event
 - Tap event → Detail screen with assignment UI
@@ -712,7 +733,7 @@ This invitation does not expire.
 4. Modal closes, detail screen updates
 
 **System Actions on Assignment:**
-1. Update event.assigned_parent_id
+1. Update event.assigned_to_user_id
 2. Update event in assigned parent's Google Calendar:
    - Update description to include "🎯 Assigned to: [Name]"
    - Update notification time to 10 min before calculated departure
@@ -1041,7 +1062,7 @@ Notification/Alert:
 
 **CREATE (New Event from ICS):**
 1. Import event from ICS feed
-2. Create event in database (assigned_parent_id = NULL)
+2. Create event in database (assigned_to_user_id = NULL)
 3. For each active parent member of Event Calendar:
    - Create sync record (status = pending)
    - Queue Google Calendar API write
@@ -1158,7 +1179,7 @@ Notification/Alert:
 - Can only assign events from Event Calendars you're a member of
 
 **Google Calendar Access:**
-- OAuth tokens stored securely (encrypted)
+- Google refresh tokens stored securely (encrypted as `google_refresh_token_enc`)
 - Tokens can be revoked
 - Minimal required scopes
 

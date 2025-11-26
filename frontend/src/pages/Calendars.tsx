@@ -537,7 +537,7 @@ function Calendars() {
         <Card className="text-center py-12">
           <CardContent className="pt-6 space-y-4">
             <p className="text-muted-foreground">Create a Calendar to Manage Events</p>
-            <Button onClick={openAddDialog}>Add Calendar</Button>
+            <Button onClick={openAddDialog}>+ Add Calendar</Button>
           </CardContent>
         </Card>
       ) : (

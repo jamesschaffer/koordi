@@ -428,7 +428,7 @@ function Dashboard() {
                 <p className="text-sm text-muted-foreground">
                   Once you add a calendar you can view and manage events with Google Calendar
                 </p>
-                <Button onClick={() => navigate('/calendars?action=add')}>Add Calendar</Button>
+                <Button onClick={() => navigate('/calendars?action=add')}>+ Add Calendar</Button>
               </div>
             ) : (
               <>

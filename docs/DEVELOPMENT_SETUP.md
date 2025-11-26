@@ -96,10 +96,14 @@ Save as `.vscode/extensions.json` in project root.
 │   ├── vite.config.ts
 │   └── tsconfig.json
 │
-├── mobile/                     # Capacitor mobile configuration
-│   ├── android/               # Android project
-│   ├── ios/                   # iOS project
-│   └── capacitor.config.ts
+├── marketing-site/             # Marketing website (www.koordie.com)
+│   ├── index.html             # Landing page
+│   ├── privacy-policy.html    # Privacy policy page
+│   ├── terms-of-service.html  # Terms of service page
+│   └── Dockerfile             # Container for Cloud Run
+│
+├── scripts/                    # Utility scripts
+│   └── start-dev.sh           # Start development environment
 │
 ├── docs/                       # Documentation (this file!)
 │   ├── API_SPECIFICATION.md
@@ -107,10 +111,10 @@ Save as `.vscode/extensions.json` in project root.
 │   ├── AUTHENTICATION.md
 │   └── ...
 │
-├── .env.example               # Environment variables template
+├── .github/                   # GitHub Actions workflows
+│   └── workflows/             # CI/CD deployment workflows
 ├── .gitignore
-├── README.md
-└── package.json               # Root package.json (optional monorepo)
+└── README.md
 ```
 
 ---
@@ -284,7 +288,7 @@ cd frontend
 npm install
 
 # Install additional dependencies
-npm install @tanstack/react-query react-router-dom socket.io-client @capacitor/core @capacitor/ios @capacitor/android
+npm install @tanstack/react-query react-router-dom socket.io-client
 
 # Install UI dependencies
 npm install tailwindcss postcss autoprefixer
