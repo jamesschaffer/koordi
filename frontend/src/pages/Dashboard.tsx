@@ -172,7 +172,7 @@ function Dashboard() {
   // Get unique members from all calendars
   const allMembers = calendars?.reduce((acc, cal) => {
     cal.members.forEach((member) => {
-      if (!acc.find((m) => m.id === member.user.id)) {
+      if (member.user && !acc.find((m) => m.id === member.user.id)) {
         acc.push(member.user);
       }
     });
