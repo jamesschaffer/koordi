@@ -53,14 +53,14 @@ function Setup() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
-      <Card className="w-full max-w-2xl shadow-xl">
+      <Card className="w-full max-w-md shadow-xl">
         <CardHeader className="text-center space-y-3 pb-8">
           <div className="mx-auto w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mb-2">
             <MapPin className="w-8 h-8 text-blue-600" />
           </div>
-          <CardTitle className="text-3xl font-bold">Welcome to Koordie!</CardTitle>
+          <CardTitle className="text-3xl font-bold">Welcome to Koordie</CardTitle>
           <CardDescription className="text-lg">
-            {user?.name ? `Hi ${user.name.split(' ')[0]}! ` : 'Hi! '}
+            {user?.name ? `Hi ${user.name.split(' ')[0]}, ` : ''}
             Let's set your address so we can provide you drive time estimates for your events.
           </CardDescription>
         </CardHeader>
@@ -78,7 +78,7 @@ function Setup() {
                     setLongitude(lng);
                   }}
                   onValidationChange={setIsAddressValid}
-                  label="Home Address *"
+                  label="Home Address"
                   placeholder="Enter your home address"
                 />
               </div>

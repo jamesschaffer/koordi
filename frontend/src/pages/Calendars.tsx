@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   getCalendars,
@@ -54,6 +55,7 @@ function Calendars() {
   const queryClient = useQueryClient();
   const token = localStorage.getItem('auth_token') || '';
   const { user } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const [dialogMode, setDialogMode] = useState<DialogMode>(null);
   const [childMode, setChildMode] = useState<'existing' | 'new'>('existing');
@@ -84,6 +86,16 @@ function Calendars() {
     queryKey: ['children'],
     queryFn: () => getChildren(token),
   });
+
+  // Auto-open add dialog if action=add query param is present
+  useEffect(() => {
+    if (searchParams.get('action') === 'add') {
+      setChildMode((!children || children.length === 0) ? 'new' : 'existing');
+      setDialogMode('add');
+      // Clear the query param
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams, children, setSearchParams]);
 
   // Get selected calendar for editing
   const calendarToEdit = calendars?.find((c) => c.id === selectedCalendar);
@@ -308,7 +320,7 @@ function Calendars() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Event Calendars</h1>
+          <h1 className="text-3xl font-bold tracking-tight">Calendars</h1>
         </div>
         <Button onClick={openAddDialog}>+ Add Calendar</Button>
       </div>
@@ -523,9 +535,9 @@ function Calendars() {
       {/* Calendars List */}
       {!calendars || calendars.length === 0 ? (
         <Card className="text-center py-12">
-          <CardContent className="pt-6">
-            <p className="text-muted-foreground mb-2">No calendars yet</p>
-            <p className="text-sm text-muted-foreground">Click "+ Add Calendar" to get started</p>
+          <CardContent className="pt-6 space-y-4">
+            <p className="text-muted-foreground">Create a Calendar to Manage Events</p>
+            <Button onClick={openAddDialog}>Add Calendar</Button>
           </CardContent>
         </Card>
       ) : (

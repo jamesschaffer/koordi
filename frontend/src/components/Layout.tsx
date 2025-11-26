@@ -58,7 +58,7 @@ function Layout() {
                       : 'text-gray-700 hover:bg-gray-100'
                   }`}
                 >
-                  Dashboard
+                  Events
                 </Link>
                 <Link
                   to="/calendars"
@@ -114,7 +114,7 @@ function Layout() {
                         : 'text-gray-700 hover:bg-gray-100'
                     }`}
                   >
-                    Dashboard
+                    Events
                   </Link>
                   <Link
                     to="/calendars"
