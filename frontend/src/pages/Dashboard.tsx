@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { Calendar, MapPin, User, AlertTriangle } from 'lucide-react';
+import { Calendar, MapPin, User, AlertTriangle, Loader2 } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Input } from '@/components/ui/input';
 import { useToast } from '@/hooks/use-toast';
@@ -51,6 +51,9 @@ function Dashboard() {
     currentState: ConcurrentModificationError['details']['current_state'];
   } | null>(null);
 
+  // Track which event is currently being assigned (for loading state)
+  const [pendingAssignmentEventId, setPendingAssignmentEventId] = useState<string | null>(null);
+
   // Fetch calendars for filter dropdown
   const { data: calendars } = useQuery({
     queryKey: ['calendars'],
@@ -92,6 +95,7 @@ function Dashboard() {
     }) =>
       assignEvent(eventId, userId, expectedVersion, token),
     onSuccess: () => {
+      setPendingAssignmentEventId(null);
       queryClient.invalidateQueries({ queryKey: ['events'] });
       toast({
         title: 'Success',
@@ -99,6 +103,7 @@ function Dashboard() {
       });
     },
     onError: (error: any) => {
+      setPendingAssignmentEventId(null);
       // Handle concurrent modification (HTTP 409)
       if (error.response?.status === 409 && error.response?.data?.code === 'CONCURRENT_MODIFICATION') {
         const conflictData = error.response.data as ConcurrentModificationError;
@@ -160,10 +165,15 @@ function Dashboard() {
       return;
     }
 
+    // Set loading state immediately
+    setPendingAssignmentEventId(eventId);
+
     if (userId) {
       try {
         const { hasConflicts, conflicts } = await checkEventConflicts(eventId, userId, token);
         if (hasConflicts) {
+          // Clear loading state since we're showing a dialog
+          setPendingAssignmentEventId(null);
           // Find assignee name
           const assignee = allMembers?.find((m) => m.id === userId);
 
@@ -173,6 +183,7 @@ function Dashboard() {
             conflicts,
             assigneeName: assignee?.name || assignee?.email,
             onConfirm: () => {
+              setPendingAssignmentEventId(eventId);
               assignMutation.mutate({ eventId, userId, expectedVersion: event.version });
             },
           });
@@ -180,6 +191,8 @@ function Dashboard() {
         }
       } catch (error) {
         console.error('Failed to check conflicts:', error);
+        setPendingAssignmentEventId(null);
+        return;
       }
     }
     assignMutation.mutate({ eventId, userId, expectedVersion: event.version });
@@ -466,6 +479,11 @@ function Dashboard() {
         </Card>
       ) : (
         <div className="space-y-4">
+          {filter === 'unassigned' && (
+            <p className="text-lg text-muted-foreground">
+              📅 Please assign who is responsible for these events
+            </p>
+          )}
           {events.map((event: Event, index: number) => {
             const conflicts = eventsWithConflicts as Record<string, string[]>;
             const hasConflict = conflicts[event.id]?.length > 0;
@@ -531,68 +549,75 @@ function Dashboard() {
 
                   {/* Assignment Controls */}
                   <div className="w-full md:w-auto md:ml-4 flex flex-col gap-2 items-stretch md:items-end">
-                    <Select
-                      value={event.assigned_to_user_id || 'unassigned'}
-                      onValueChange={(value) =>
-                        handleAssign(event.id, value === 'unassigned' ? null : value)
-                      }
-                    >
-                      <SelectTrigger className="w-full md:w-64">
-                        <SelectValue>
-                          {event.assigned_to ? (
-                            <div className="flex items-center gap-2">
-                              <Avatar className="w-6 h-6">
-                                <AvatarImage src={event.assigned_to.avatar_url || undefined} alt={event.assigned_to.name} />
-                                <AvatarFallback className="text-xs">
-                                  {event.assigned_to.name?.split(' ').map(n => n[0]).join('').toUpperCase() || '?'}
-                                </AvatarFallback>
-                              </Avatar>
-                              <div className="flex flex-col items-start text-left">
-                                <span className="text-sm font-medium leading-tight">{event.assigned_to.name}</span>
-                                <span className="text-xs text-muted-foreground leading-tight">{event.assigned_to.email}</span>
+                    {(() => {
+                      const isAssigning = pendingAssignmentEventId === event.id;
+                      return (
+                        <Select
+                          value={event.assigned_to_user_id || 'unassigned'}
+                          onValueChange={(value) =>
+                            handleAssign(event.id, value === 'unassigned' ? null : value)
+                          }
+                          disabled={isAssigning}
+                        >
+                          <SelectTrigger className="w-full md:w-64" disabled={isAssigning}>
+                            <SelectValue>
+                              {isAssigning ? (
+                                <div className="flex items-center gap-2">
+                                  <Loader2 className="w-4 h-4 animate-spin" />
+                                  <span className="text-muted-foreground">Updating...</span>
+                                </div>
+                              ) : event.assigned_to ? (
+                                <div className="flex items-center gap-2">
+                                  <Avatar className="w-6 h-6">
+                                    <AvatarImage src={event.assigned_to.avatar_url || undefined} alt={event.assigned_to.name} />
+                                    <AvatarFallback className="text-xs">
+                                      {event.assigned_to.name?.split(' ').map(n => n[0]).join('').toUpperCase() || '?'}
+                                    </AvatarFallback>
+                                  </Avatar>
+                                  <div className="flex flex-col items-start text-left">
+                                    <span className="text-sm font-medium leading-tight">{event.assigned_to.name}</span>
+                                    <span className="text-xs text-muted-foreground leading-tight">{event.assigned_to.email}</span>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="flex items-center gap-2">
+                                  <div className="w-6 h-6 rounded-full bg-muted flex items-center justify-center">
+                                    <User className="w-3 h-3 text-muted-foreground" />
+                                  </div>
+                                  <span className="text-muted-foreground">Unassigned</span>
+                                </div>
+                              )}
+                            </SelectValue>
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="unassigned">
+                              <div className="flex items-center gap-2">
+                                <div className="w-6 h-6 rounded-full bg-muted flex items-center justify-center">
+                                  <User className="w-3 h-3 text-muted-foreground" />
+                                </div>
+                                <span>Unassigned</span>
                               </div>
-                            </div>
-                          ) : (
-                            <div className="flex items-center gap-2">
-                              <Avatar className="w-6 h-6">
-                                <AvatarFallback className="text-xs text-muted-foreground">
-                                  <User className="w-3 h-3" />
-                                </AvatarFallback>
-                              </Avatar>
-                              <span className="text-muted-foreground">Unassigned</span>
-                            </div>
-                          )}
-                        </SelectValue>
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="unassigned">
-                          <div className="flex items-center gap-2">
-                            <Avatar className="w-6 h-6">
-                              <AvatarFallback className="text-xs text-muted-foreground">
-                                <User className="w-3 h-3" />
-                              </AvatarFallback>
-                            </Avatar>
-                            <span>Unassigned</span>
-                          </div>
-                        </SelectItem>
-                        {allMembers?.map((member) => (
-                          <SelectItem key={member.id} value={member.id}>
-                            <div className="flex items-center gap-2">
-                              <Avatar className="w-6 h-6">
-                                <AvatarImage src={member.avatar_url || undefined} alt={member.name} />
-                                <AvatarFallback className="text-xs">
-                                  {member.name?.split(' ').map(n => n[0]).join('').toUpperCase() || '?'}
-                                </AvatarFallback>
-                              </Avatar>
-                              <div className="flex flex-col items-start">
-                                <span className="text-sm font-medium leading-tight">{member.name}</span>
-                                <span className="text-xs text-muted-foreground leading-tight">{member.email}</span>
-                              </div>
-                            </div>
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                            </SelectItem>
+                            {allMembers?.map((member) => (
+                              <SelectItem key={member.id} value={member.id}>
+                                <div className="flex items-center gap-2">
+                                  <Avatar className="w-6 h-6">
+                                    <AvatarImage src={member.avatar_url || undefined} alt={member.name} />
+                                    <AvatarFallback className="text-xs">
+                                      {member.name?.split(' ').map(n => n[0]).join('').toUpperCase() || '?'}
+                                    </AvatarFallback>
+                                  </Avatar>
+                                  <div className="flex flex-col items-start">
+                                    <span className="text-sm font-medium leading-tight">{member.name}</span>
+                                    <span className="text-xs text-muted-foreground leading-tight">{member.email}</span>
+                                  </div>
+                                </div>
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      );
+                    })()}
                   </div>
                 </div>
               </CardContent>

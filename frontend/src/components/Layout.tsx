@@ -1,7 +1,9 @@
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useEffect, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useSocketEvents } from '../hooks/useSocketEvents';
+import { getEvents } from '../lib/api-events';
 import { Menu, LogOut, User as UserIcon } from 'lucide-react';
 import {
   Sheet,
@@ -30,6 +32,16 @@ function Layout() {
   // Enable WebSocket real-time updates
   useSocketEvents();
 
+  // Fetch unassigned events count for nav badge
+  const token = localStorage.getItem('auth_token') || '';
+  const { data: unassignedEvents } = useQuery({
+    queryKey: ['events', 'unassigned-count', 'nav'],
+    queryFn: () => getEvents(token, { unassigned: true }),
+    enabled: !!token && !!user,
+    refetchInterval: 60000, // Refresh every minute
+  });
+  const unassignedCount = unassignedEvents?.length || 0;
+
   // Redirect to setup if user doesn't have home address
   useEffect(() => {
     if (!loading && user && !user.home_address) {
@@ -52,13 +64,18 @@ function Layout() {
               <nav className="hidden md:flex gap-4">
                 <Link
                   to="/"
-                  className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                  className={`relative px-3 py-2 rounded-md text-sm font-medium transition-colors ${
                     location.pathname === '/'
                       ? 'bg-blue-100 text-blue-700'
                       : 'text-gray-700 hover:bg-gray-100'
                   }`}
                 >
                   Events
+                  {unassignedCount > 0 && (
+                    <span className="absolute -top-2 -right-2 min-w-5 h-5 flex items-center justify-center rounded-full bg-red-500 text-white text-xs font-medium px-1.5">
+                      {unassignedCount > 99 ? '99+' : unassignedCount}
+                    </span>
+                  )}
                 </Link>
                 <Link
                   to="/calendars"
@@ -108,13 +125,18 @@ function Layout() {
                   <Link
                     to="/"
                     onClick={() => setMobileMenuOpen(false)}
-                    className={`px-3 py-3 rounded-md text-base font-medium transition-colors ${
+                    className={`relative px-3 py-3 rounded-md text-base font-medium transition-colors ${
                       location.pathname === '/'
                         ? 'bg-blue-100 text-blue-700'
                         : 'text-gray-700 hover:bg-gray-100'
                     }`}
                   >
                     Events
+                    {unassignedCount > 0 && (
+                      <span className="absolute top-1 right-1 min-w-5 h-5 flex items-center justify-center rounded-full bg-red-500 text-white text-xs font-medium px-1.5">
+                        {unassignedCount > 99 ? '99+' : unassignedCount}
+                      </span>
+                    )}
                   </Link>
                   <Link
                     to="/calendars"
