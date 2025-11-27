@@ -9,6 +9,7 @@ import { Card, CardContent, CardDescription, CardTitle } from '@/components/ui/c
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Calendar, MapPin, User, AlertTriangle } from 'lucide-react';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Input } from '@/components/ui/input';
 import { useToast } from '@/hooks/use-toast';
 import { ConflictWarningDialog } from '../components/ConflictWarningDialog';
@@ -68,6 +69,19 @@ function Dashboard() {
         end_date: endDate || undefined,
       }),
   });
+
+  // Fetch unassigned count separately (for badge display)
+  const { data: unassignedEvents } = useQuery({
+    queryKey: ['events', 'unassigned-count', startDate, endDate],
+    queryFn: () =>
+      getEvents(token, {
+        unassigned: true,
+        start_date: startDate || undefined,
+        end_date: endDate || undefined,
+      }),
+  });
+
+  const unassignedCount = unassignedEvents?.length || 0;
 
   // Assignment mutation with optimistic locking
   const assignMutation = useMutation({
@@ -179,7 +193,7 @@ function Dashboard() {
       }
     });
     return acc;
-  }, [] as Array<{ id: string; name: string; email: string }>);
+  }, [] as Array<{ id: string; name: string; email: string; avatar_url?: string | null }>);
 
   // Helper function to parse arrival time from event description
   const parseArrivalTime = (description: string | undefined, eventStartTime: string): Date | null => {
@@ -342,22 +356,28 @@ function Dashboard() {
             {/* Filter tabs */}
             <div className="flex gap-2">
               <Button
-                onClick={() => setFilter('all')}
-                variant={filter === 'all' ? 'default' : 'outline'}
-              >
-                All Events
-              </Button>
-              <Button
                 onClick={() => setFilter('unassigned')}
                 variant={filter === 'unassigned' ? 'default' : 'outline'}
+                className="relative"
               >
                 Unassigned
+                {unassignedCount > 0 && (
+                  <span className="absolute -top-2 -right-2 min-w-5 h-5 flex items-center justify-center rounded-full bg-red-500 text-white text-xs font-medium px-1.5">
+                    {unassignedCount > 99 ? '99+' : unassignedCount}
+                  </span>
+                )}
               </Button>
               <Button
                 onClick={() => setFilter('mine')}
                 variant={filter === 'mine' ? 'default' : 'outline'}
               >
                 My Events
+              </Button>
+              <Button
+                onClick={() => setFilter('all')}
+                variant={filter === 'all' ? 'default' : 'outline'}
+              >
+                All Events
               </Button>
             </div>
 
@@ -517,16 +537,28 @@ function Dashboard() {
                         handleAssign(event.id, value === 'unassigned' ? null : value)
                       }
                     >
-                      <SelectTrigger className="w-full md:w-48">
+                      <SelectTrigger className="w-full md:w-64">
                         <SelectValue>
                           {event.assigned_to ? (
                             <div className="flex items-center gap-2">
-                              <User className="w-4 h-4" />
-                              {event.assigned_to.email}
+                              <Avatar className="w-6 h-6">
+                                <AvatarImage src={event.assigned_to.avatar_url || undefined} alt={event.assigned_to.name} />
+                                <AvatarFallback className="text-xs">
+                                  {event.assigned_to.name?.split(' ').map(n => n[0]).join('').toUpperCase() || '?'}
+                                </AvatarFallback>
+                              </Avatar>
+                              <div className="flex flex-col items-start text-left">
+                                <span className="text-sm font-medium leading-tight">{event.assigned_to.name}</span>
+                                <span className="text-xs text-muted-foreground leading-tight">{event.assigned_to.email}</span>
+                              </div>
                             </div>
                           ) : (
                             <div className="flex items-center gap-2">
-                              <User className="w-4 h-4 text-muted-foreground" />
+                              <Avatar className="w-6 h-6">
+                                <AvatarFallback className="text-xs text-muted-foreground">
+                                  <User className="w-3 h-3" />
+                                </AvatarFallback>
+                              </Avatar>
                               <span className="text-muted-foreground">Unassigned</span>
                             </div>
                           )}
@@ -535,15 +567,27 @@ function Dashboard() {
                       <SelectContent>
                         <SelectItem value="unassigned">
                           <div className="flex items-center gap-2">
-                            <User className="w-4 h-4 text-muted-foreground" />
-                            Unassigned
+                            <Avatar className="w-6 h-6">
+                              <AvatarFallback className="text-xs text-muted-foreground">
+                                <User className="w-3 h-3" />
+                              </AvatarFallback>
+                            </Avatar>
+                            <span>Unassigned</span>
                           </div>
                         </SelectItem>
                         {allMembers?.map((member) => (
                           <SelectItem key={member.id} value={member.id}>
                             <div className="flex items-center gap-2">
-                              <User className="w-4 h-4" />
-                              {member.email}
+                              <Avatar className="w-6 h-6">
+                                <AvatarImage src={member.avatar_url || undefined} alt={member.name} />
+                                <AvatarFallback className="text-xs">
+                                  {member.name?.split(' ').map(n => n[0]).join('').toUpperCase() || '?'}
+                                </AvatarFallback>
+                              </Avatar>
+                              <div className="flex flex-col items-start">
+                                <span className="text-sm font-medium leading-tight">{member.name}</span>
+                                <span className="text-xs text-muted-foreground leading-tight">{member.email}</span>
+                              </div>
                             </div>
                           </SelectItem>
                         ))}
