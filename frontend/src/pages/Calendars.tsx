@@ -16,7 +16,9 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
+import { cn } from '@/lib/utils';
 import {
   Dialog,
   DialogContent,
@@ -43,7 +45,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { toast } from 'sonner';
-import { Pencil, Trash2, RefreshCw, AlertCircle, CheckCircle2, Users, MoreVertical } from 'lucide-react';
+import { Pencil, Trash2, RefreshCw, AlertCircle, CheckCircle2, Users, MoreVertical, Check, ChevronsUpDown, Plus } from 'lucide-react';
 import { MembersDialog } from '../components/MembersDialog';
 import { OperationBlockingModal } from '../components/OperationBlockingModal';
 import { MultiMemberDeleteError } from '../components/MultiMemberDeleteError';
@@ -58,8 +60,12 @@ function Calendars() {
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [dialogMode, setDialogMode] = useState<DialogMode>(null);
-  const [childMode, setChildMode] = useState<'existing' | 'new'>('existing');
   const [selectedCalendar, setSelectedCalendar] = useState<string | null>(null);
+
+  // Child combobox state
+  const [childComboboxOpen, setChildComboboxOpen] = useState(false);
+  const [selectedChildId, setSelectedChildId] = useState<string | null>(null);
+  const [newChildName, setNewChildName] = useState<string>('');
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [membersDialogCalendarId, setMembersDialogCalendarId] = useState<string | null>(null);
 
@@ -90,12 +96,11 @@ function Calendars() {
   // Auto-open add dialog if action=add query param is present
   useEffect(() => {
     if (searchParams.get('action') === 'add') {
-      setChildMode((!children || children.length === 0) ? 'new' : 'existing');
       setDialogMode('add');
       // Clear the query param
       setSearchParams({}, { replace: true });
     }
-  }, [searchParams, children, setSearchParams]);
+  }, [searchParams, setSearchParams]);
 
   // Get selected calendar for editing
   const calendarToEdit = calendars?.find((c) => c.id === selectedCalendar);
@@ -218,7 +223,9 @@ function Calendars() {
     setIcsUrl('');
     setIcsValidation(null);
     setValidationStep('url');
-    setChildMode('existing');
+    setSelectedChildId(null);
+    setNewChildName('');
+    setChildComboboxOpen(false);
   };
 
   const handleValidateICS = () => {
@@ -248,21 +255,23 @@ function Calendars() {
       });
     } else {
       // Create new calendar
-      let childId = formData.get('child_id') as string;
+      let childId = selectedChildId;
 
       // If creating a new child, create it first
-      if (childMode === 'new') {
-        const childName = formData.get('new_child_name') as string;
-        if (!childName) return;
-
+      if (!selectedChildId && newChildName.trim()) {
         try {
-          const newChild = await createChildMutation.mutateAsync({ name: childName });
+          const newChild = await createChildMutation.mutateAsync({ name: newChildName.trim() });
           childId = newChild.id;
         } catch (error) {
           console.error('Failed to create child:', error);
           toast.error('Failed to create child');
           return;
         }
+      }
+
+      if (!childId) {
+        toast.error('Please select or create a child');
+        return;
       }
 
       createCalendarMutation.mutate({
@@ -304,7 +313,6 @@ function Calendars() {
   };
 
   const openAddDialog = () => {
-    setChildMode((!children || children.length === 0) ? 'new' : 'existing');
     setDialogMode('add');
   };
 
@@ -379,7 +387,7 @@ function Calendars() {
             <form onSubmit={handleSubmit}>
               <div className="space-y-4 py-4">
                 {dialogMode === 'add' && icsValidation && (
-                  <div className="flex items-start gap-2 p-3 rounded-md bg-green-50 text-green-900 dark:bg-green-900/20 dark:text-green-300">
+                  <div className="flex items-start gap-2 p-3 rounded-md bg-green-50 text-green-900">
                     <CheckCircle2 className="h-5 w-5 shrink-0 mt-0.5" />
                     <div className="text-sm">
                       <p className="font-medium">Calendar Validated Successfully!</p>
@@ -435,52 +443,82 @@ function Calendars() {
                 {dialogMode === 'add' && (
                   <div className="space-y-2">
                     <Label>Child *</Label>
-
-                    <div className="flex gap-4 mb-3">
-                      <label className="flex items-center cursor-pointer">
-                        <input
-                          type="radio"
-                          name="child_mode"
-                          value="existing"
-                          checked={childMode === 'existing'}
-                          onChange={() => setChildMode('existing')}
-                          className="mr-2"
-                        />
-                        <span className="text-sm">Select existing</span>
-                      </label>
-                      <label className="flex items-center cursor-pointer">
-                        <input
-                          type="radio"
-                          name="child_mode"
-                          value="new"
-                          checked={childMode === 'new'}
-                          onChange={() => setChildMode('new')}
-                          className="mr-2"
-                        />
-                        <span className="text-sm">Create new</span>
-                      </label>
-                    </div>
-
-                    {childMode === 'existing' ? (
-                      <Select name="child_id" required={childMode === 'existing'}>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select a child" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {children?.map((child) => (
-                            <SelectItem key={child.id} value={child.id}>
-                              {child.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    ) : (
-                      <Input
-                        name="new_child_name"
-                        placeholder="Enter child's name"
-                        required={childMode === 'new'}
-                      />
-                    )}
+                    <Popover open={childComboboxOpen} onOpenChange={setChildComboboxOpen} modal={true}>
+                      <PopoverTrigger asChild>
+                        <Button
+                          variant="outline"
+                          role="combobox"
+                          aria-expanded={childComboboxOpen}
+                          className="w-full justify-between font-normal"
+                        >
+                          {selectedChildId
+                            ? children?.find((child) => child.id === selectedChildId)?.name
+                            : newChildName
+                            ? `Create "${newChildName}"`
+                            : "Select or create a child..."}
+                          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+                        <Command>
+                          <CommandInput
+                            placeholder="Search or enter new name..."
+                            value={newChildName}
+                            onValueChange={(value) => {
+                              setNewChildName(value);
+                              // Clear selection if user starts typing
+                              if (selectedChildId) {
+                                setSelectedChildId(null);
+                              }
+                            }}
+                          />
+                          <CommandList>
+                            {children && children.length > 0 && (
+                              <CommandGroup heading="Existing children">
+                                {children.map((child) => (
+                                  <CommandItem
+                                    key={child.id}
+                                    value={child.name}
+                                    onSelect={() => {
+                                      setSelectedChildId(child.id);
+                                      setNewChildName('');
+                                      setChildComboboxOpen(false);
+                                    }}
+                                  >
+                                    <Check
+                                      className={cn(
+                                        "mr-2 h-4 w-4",
+                                        selectedChildId === child.id ? "opacity-100" : "opacity-0"
+                                      )}
+                                    />
+                                    {child.name}
+                                  </CommandItem>
+                                ))}
+                              </CommandGroup>
+                            )}
+                            {newChildName.trim() && !children?.some(
+                              (child) => child.name.toLowerCase() === newChildName.toLowerCase()
+                            ) && (
+                              <CommandGroup heading="Create new">
+                                <CommandItem
+                                  value={`create-${newChildName}`}
+                                  onSelect={() => {
+                                    setSelectedChildId(null);
+                                    setChildComboboxOpen(false);
+                                  }}
+                                >
+                                  <Plus className="mr-2 h-4 w-4" />
+                                  Create "{newChildName}"
+                                </CommandItem>
+                              </CommandGroup>
+                            )}
+                            {!newChildName.trim() && (!children || children.length === 0) && (
+                              <CommandEmpty>Type a name to create a new child</CommandEmpty>
+                            )}
+                          </CommandList>
+                        </Command>
+                      </PopoverContent>
+                    </Popover>
                   </div>
                 )}
               </div>
