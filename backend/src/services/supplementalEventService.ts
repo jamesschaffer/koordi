@@ -42,6 +42,12 @@ export async function createSupplementalEvents(
     throw new Error('Event not found');
   }
 
+  // Skip all-day events - they don't have specific times for drive time calculations
+  if (event.is_all_day) {
+    console.log(`Event ${eventId} is an all-day event, skipping supplemental event creation`);
+    throw new Error('Cannot create supplemental events for all-day events');
+  }
+
   // Fetch the assigned user's settings and home address
   const user = await prisma.user.findUnique({
     where: { id: assignedUserId },

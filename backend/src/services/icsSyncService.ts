@@ -63,8 +63,20 @@ export const fetchAndParseICS = async (icsUrl: string): Promise<ParsedEvent[]> =
       }
 
       // Check if all-day event
+      // 1. Standard ICS: VALUE=DATE (datetype === 'date')
+      // 2. TeamSnap TBD pattern: exactly 24-hour duration (midnight-to-midnight in source timezone)
+      //    Note: node-ical converts times to UTC, so we can't check for midnight directly.
+      //    Instead, we check for exactly 24-hour duration which is the reliable indicator.
       if (event.datetype === 'date') {
         isAllDay = true;
+      } else {
+        const durationMs = endTime.getTime() - startTime.getTime();
+        const durationHours = durationMs / (1000 * 60 * 60);
+
+        // Exactly 24 hours indicates an all-day/TBD event
+        if (durationHours === 24) {
+          isAllDay = true;
+        }
       }
 
       // Get last modified timestamp

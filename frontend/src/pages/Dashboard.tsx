@@ -506,8 +506,13 @@ function Dashboard() {
                             style={{ backgroundColor: event.event_calendar.color }}
                           />
                           <div className="flex-1">
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 flex-wrap">
                               <CardTitle className="text-lg">{event.title}</CardTitle>
+                              {event.is_all_day && (
+                                <Badge variant="secondary" className="bg-gray-200 text-gray-700">
+                                  All Day
+                                </Badge>
+                              )}
                               {hasConflict && (
                                 <Badge variant="destructive" className="bg-amber-600">
                                   <AlertTriangle className="w-3 h-3 mr-1" />
@@ -550,75 +555,81 @@ function Dashboard() {
 
                   {/* Assignment Controls */}
                   <div className="w-full md:w-auto md:ml-4 flex flex-col gap-2 items-stretch md:items-end">
-                    {(() => {
-                      const isAssigning = pendingAssignmentEventId === event.id;
-                      return (
-                        <Select
-                          value={event.assigned_to_user_id || 'unassigned'}
-                          onValueChange={(value) =>
-                            handleAssign(event.id, value === 'unassigned' ? null : value)
-                          }
-                          disabled={isAssigning}
-                        >
-                          <SelectTrigger className="w-full md:w-64" disabled={isAssigning}>
-                            <SelectValue>
-                              {isAssigning ? (
-                                <div className="flex items-center gap-2">
-                                  <Loader2 className="w-4 h-4 animate-spin" />
-                                  <span className="text-muted-foreground">Updating...</span>
-                                </div>
-                              ) : event.assigned_to ? (
-                                <div className="flex items-center gap-2">
-                                  <Avatar className="w-6 h-6">
-                                    <AvatarImage src={event.assigned_to.avatar_url || undefined} alt={event.assigned_to.name} />
-                                    <AvatarFallback className="text-xs">
-                                      {event.assigned_to.name?.split(' ').map(n => n[0]).join('').toUpperCase() || '?'}
-                                    </AvatarFallback>
-                                  </Avatar>
-                                  <div className="flex flex-col items-start text-left">
-                                    <span className="text-sm font-medium leading-tight">{event.assigned_to.name}</span>
-                                    <span className="text-xs text-muted-foreground leading-tight">{event.assigned_to.email}</span>
+                    {event.is_all_day ? (
+                      <div className="w-full md:w-64 px-3 py-2 text-sm text-muted-foreground bg-muted rounded-md text-center">
+                        Assignment not available for all-day events
+                      </div>
+                    ) : (
+                      (() => {
+                        const isAssigning = pendingAssignmentEventId === event.id;
+                        return (
+                          <Select
+                            value={event.assigned_to_user_id || 'unassigned'}
+                            onValueChange={(value) =>
+                              handleAssign(event.id, value === 'unassigned' ? null : value)
+                            }
+                            disabled={isAssigning}
+                          >
+                            <SelectTrigger className="w-full md:w-64" disabled={isAssigning}>
+                              <SelectValue>
+                                {isAssigning ? (
+                                  <div className="flex items-center gap-2">
+                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                    <span className="text-muted-foreground">Updating...</span>
                                   </div>
-                                </div>
-                              ) : (
+                                ) : event.assigned_to ? (
+                                  <div className="flex items-center gap-2">
+                                    <Avatar className="w-6 h-6">
+                                      <AvatarImage src={event.assigned_to.avatar_url || undefined} alt={event.assigned_to.name} />
+                                      <AvatarFallback className="text-xs">
+                                        {event.assigned_to.name?.split(' ').map(n => n[0]).join('').toUpperCase() || '?'}
+                                      </AvatarFallback>
+                                    </Avatar>
+                                    <div className="flex flex-col items-start text-left">
+                                      <span className="text-sm font-medium leading-tight">{event.assigned_to.name}</span>
+                                      <span className="text-xs text-muted-foreground leading-tight">{event.assigned_to.email}</span>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div className="flex items-center gap-2">
+                                    <div className="w-6 h-6 rounded-full bg-muted flex items-center justify-center">
+                                      <User className="w-3 h-3 text-muted-foreground" />
+                                    </div>
+                                    <span className="text-muted-foreground">Unassigned</span>
+                                  </div>
+                                )}
+                              </SelectValue>
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="unassigned">
                                 <div className="flex items-center gap-2">
                                   <div className="w-6 h-6 rounded-full bg-muted flex items-center justify-center">
                                     <User className="w-3 h-3 text-muted-foreground" />
                                   </div>
-                                  <span className="text-muted-foreground">Unassigned</span>
-                                </div>
-                              )}
-                            </SelectValue>
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="unassigned">
-                              <div className="flex items-center gap-2">
-                                <div className="w-6 h-6 rounded-full bg-muted flex items-center justify-center">
-                                  <User className="w-3 h-3 text-muted-foreground" />
-                                </div>
-                                <span>Unassigned</span>
-                              </div>
-                            </SelectItem>
-                            {allMembers?.map((member) => (
-                              <SelectItem key={member.id} value={member.id}>
-                                <div className="flex items-center gap-2">
-                                  <Avatar className="w-6 h-6">
-                                    <AvatarImage src={member.avatar_url || undefined} alt={member.name} />
-                                    <AvatarFallback className="text-xs">
-                                      {member.name?.split(' ').map(n => n[0]).join('').toUpperCase() || '?'}
-                                    </AvatarFallback>
-                                  </Avatar>
-                                  <div className="flex flex-col items-start">
-                                    <span className="text-sm font-medium leading-tight">{member.name}</span>
-                                    <span className="text-xs text-muted-foreground leading-tight">{member.email}</span>
-                                  </div>
+                                  <span>Unassigned</span>
                                 </div>
                               </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      );
-                    })()}
+                              {allMembers?.map((member) => (
+                                <SelectItem key={member.id} value={member.id}>
+                                  <div className="flex items-center gap-2">
+                                    <Avatar className="w-6 h-6">
+                                      <AvatarImage src={member.avatar_url || undefined} alt={member.name} />
+                                      <AvatarFallback className="text-xs">
+                                        {member.name?.split(' ').map(n => n[0]).join('').toUpperCase() || '?'}
+                                      </AvatarFallback>
+                                    </Avatar>
+                                    <div className="flex flex-col items-start">
+                                      <span className="text-sm font-medium leading-tight">{member.name}</span>
+                                      <span className="text-xs text-muted-foreground leading-tight">{member.email}</span>
+                                    </div>
+                                  </div>
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        );
+                      })()
+                    )}
                   </div>
                 </div>
               </CardContent>
