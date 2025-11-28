@@ -173,3 +173,37 @@ export function calculateDistanceKm(coord1: Coordinates, coord2: Coordinates): n
 function toRadians(degrees: number): number {
   return degrees * (Math.PI / 180);
 }
+
+/**
+ * Get timezone from coordinates using Google Time Zone API
+ * @param coordinates - The coordinates to lookup
+ * @returns IANA timezone string (e.g., "America/New_York")
+ */
+export async function getTimezoneFromCoordinates(coordinates: Coordinates): Promise<string> {
+  if (!GOOGLE_MAPS_API_KEY) {
+    throw new Error('Google Maps API key is not configured');
+  }
+
+  try {
+    // Timestamp in seconds (required by the API)
+    const timestamp = Math.floor(Date.now() / 1000);
+
+    const response = await axios.get('https://maps.googleapis.com/maps/api/timezone/json', {
+      params: {
+        location: `${coordinates.lat},${coordinates.lng}`,
+        timestamp,
+        key: GOOGLE_MAPS_API_KEY,
+      },
+    });
+
+    if (response.data.status !== 'OK') {
+      throw new Error(`Time Zone API failed: ${response.data.status}`);
+    }
+
+    // Returns IANA timezone ID like "America/New_York"
+    return response.data.timeZoneId;
+  } catch (error) {
+    console.error('Timezone lookup error:', error);
+    throw new Error('Failed to get timezone from coordinates');
+  }
+}

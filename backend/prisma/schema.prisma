@@ -27,6 +27,7 @@ model User {
   home_address                String?  @db.Text
   home_latitude               Decimal? @db.Decimal(10, 8)
   home_longitude              Decimal? @db.Decimal(11, 8)
+  timezone                    String?  @db.VarChar(50) // IANA timezone (e.g., "America/New_York")
   comfort_buffer_minutes      Int      @default(5) // 0-60 minutes
   keep_supplemental_events    Boolean  @default(false) // Keep drive times on reassignment
   created_at                  DateTime @default(now()) @db.Timestamptz(6)

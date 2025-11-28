@@ -13,6 +13,7 @@ export const getUserEvents = async (userId: string, filters?: {
   endDate?: Date;
   unassignedOnly?: boolean;
   assignedToMe?: boolean;
+  excludePast?: boolean;
 }) => {
   // Get user's keep_supplemental_events setting
   const user = await prisma.user.findUnique({
@@ -53,6 +54,11 @@ export const getUserEvents = async (userId: string, filters?: {
     where.assigned_to_user_id = null;
   } else if (filters?.assignedToMe) {
     where.assigned_to_user_id = userId;
+  }
+
+  // Exclude events that have already ended (end_time < now)
+  if (filters?.excludePast) {
+    where.end_time = { gte: new Date() };
   }
 
   const events = await prisma.event.findMany({

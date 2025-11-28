@@ -76,6 +76,7 @@ export const getEvents = (token: string, params?: {
   end_date?: string;
   unassigned?: boolean;
   assigned_to_me?: boolean;
+  exclude_past?: boolean;
 }) => {
   const queryParams = new URLSearchParams();
   if (params?.calendar_id) queryParams.append('calendar_id', params.calendar_id);
@@ -83,6 +84,7 @@ export const getEvents = (token: string, params?: {
   if (params?.end_date) queryParams.append('end_date', params.end_date);
   if (params?.unassigned) queryParams.append('unassigned', 'true');
   if (params?.assigned_to_me) queryParams.append('assigned_to_me', 'true');
+  if (params?.exclude_past) queryParams.append('exclude_past', 'true');
 
   const query = queryParams.toString();
   return apiClient.get<Event[]>(`/events${query ? `?${query}` : ''}`, {

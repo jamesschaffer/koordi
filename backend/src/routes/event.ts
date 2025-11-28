@@ -5,6 +5,8 @@ import { SocketEvent, emitToCalendar } from '../config/socket';
 import { deleteSupplementalEventsByType } from '../services/supplementalEventService';
 import { deleteSupplementalEventsForParent } from '../services/googleCalendarSyncService';
 import { ConcurrentModificationError } from '../errors/ConcurrentModificationError';
+import { parseDateInTimezone, DEFAULT_TIMEZONE } from '../utils/dateUtils';
+import { prisma } from '../lib/prisma';
 
 const router = express.Router();
 
@@ -20,6 +22,7 @@ router.use(authenticateToken);
  * - end_date: Filter events starting before this date
  * - unassigned: Only show unassigned events
  * - assigned_to_me: Only show events assigned to me
+ * - exclude_past: Exclude events that have already ended (end_time < now)
  */
 router.get('/', async (req: Request, res: Response) => {
   try {
@@ -31,18 +34,30 @@ router.get('/', async (req: Request, res: Response) => {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
+    // Fetch user's timezone for date parsing
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { timezone: true },
+    });
+    const userTimezone = user?.timezone || DEFAULT_TIMEZONE;
+
     const filters: any = {};
 
     if (req.query.calendar_id) {
       filters.calendarId = req.query.calendar_id as string;
     }
 
+    // Parse dates in user's timezone so "2025-11-27" means Nov 27 in their timezone
     if (req.query.start_date) {
-      filters.startDate = new Date(req.query.start_date as string);
+      const dateStr = req.query.start_date as string;
+      filters.startDate = parseDateInTimezone(dateStr, userTimezone, false); // Start of day
+      console.log(`[GET /api/events] start_date ${dateStr} parsed as ${filters.startDate.toISOString()} (timezone: ${userTimezone})`);
     }
 
     if (req.query.end_date) {
-      filters.endDate = new Date(req.query.end_date as string);
+      const dateStr = req.query.end_date as string;
+      filters.endDate = parseDateInTimezone(dateStr, userTimezone, true); // End of day (23:59:59.999)
+      console.log(`[GET /api/events] end_date ${dateStr} parsed as ${filters.endDate.toISOString()} (timezone: ${userTimezone})`);
     }
 
     if (req.query.unassigned === 'true') {
@@ -51,6 +66,10 @@ router.get('/', async (req: Request, res: Response) => {
 
     if (req.query.assigned_to_me === 'true') {
       filters.assignedToMe = true;
+    }
+
+    if (req.query.exclude_past === 'true') {
+      filters.excludePast = true;
     }
 
     console.log(`[GET /api/events] Filters:`, JSON.stringify(filters));

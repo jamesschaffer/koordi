@@ -32,11 +32,11 @@ function Layout() {
   // Enable WebSocket real-time updates
   useSocketEvents();
 
-  // Fetch unassigned events count for nav badge
+  // Fetch unassigned events count for nav badge (excludes past events)
   const token = localStorage.getItem('auth_token') || '';
   const { data: unassignedEvents } = useQuery({
     queryKey: ['events', 'unassigned-count', 'nav'],
-    queryFn: () => getEvents(token, { unassigned: true }),
+    queryFn: () => getEvents(token, { unassigned: true, exclude_past: true }),
     enabled: !!token && !!user,
     refetchInterval: 60000, // Refresh every minute
   });

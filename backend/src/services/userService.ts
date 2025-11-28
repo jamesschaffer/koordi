@@ -1,5 +1,6 @@
 import { encrypt } from '../utils/encryption';
 import { prisma } from '../lib/prisma';
+import { getTimezoneFromCoordinates } from './googleMapsService';
 
 export interface GoogleUserProfile {
   id: string;
@@ -112,19 +113,33 @@ export const deleteUser = async (userId: string) => {
   });
 };
 
-// Update user address
+// Update user address and derive timezone from coordinates
 export const updateUserAddress = async (
   userId: string,
   address: string,
   latitude?: number,
   longitude?: number,
 ) => {
+  let timezone: string | undefined;
+
+  // Lookup timezone from coordinates if available
+  if (latitude !== undefined && longitude !== undefined) {
+    try {
+      timezone = await getTimezoneFromCoordinates({ lat: latitude, lng: longitude });
+      console.log(`[updateUserAddress] Derived timezone: ${timezone} from coordinates (${latitude}, ${longitude})`);
+    } catch (error) {
+      console.error('[updateUserAddress] Failed to lookup timezone:', error);
+      // Don't fail the address update if timezone lookup fails
+    }
+  }
+
   return prisma.user.update({
     where: { id: userId },
     data: {
       home_address: address,
       home_latitude: latitude,
       home_longitude: longitude,
+      ...(timezone && { timezone }),
     },
   });
 };

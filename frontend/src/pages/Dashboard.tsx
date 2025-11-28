@@ -73,7 +73,7 @@ function Dashboard() {
       }),
   });
 
-  // Fetch unassigned count separately (for badge display)
+  // Fetch unassigned count separately (for badge display, excludes past events)
   const { data: unassignedEvents } = useQuery({
     queryKey: ['events', 'unassigned-count', startDate, endDate],
     queryFn: () =>
@@ -81,6 +81,7 @@ function Dashboard() {
         unassigned: true,
         start_date: startDate || undefined,
         end_date: endDate || undefined,
+        exclude_past: true,
       }),
   });
 
