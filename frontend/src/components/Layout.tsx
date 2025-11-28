@@ -32,11 +32,13 @@ function Layout() {
   // Enable WebSocket real-time updates
   useSocketEvents();
 
-  // Fetch unassigned events count for nav badge (excludes past events)
+  // Fetch unassigned events count for nav badge
+  // Uses same default filter as Dashboard: start_date = today, exclude_past = true
   const token = localStorage.getItem('auth_token') || '';
+  const todayDate = new Date().toISOString().split('T')[0];
   const { data: unassignedEvents } = useQuery({
-    queryKey: ['events', 'unassigned-count', 'nav'],
-    queryFn: () => getEvents(token, { unassigned: true, exclude_past: true }),
+    queryKey: ['events', 'unassigned-count', 'nav', todayDate],
+    queryFn: () => getEvents(token, { unassigned: true, start_date: todayDate, exclude_past: true }),
     enabled: !!token && !!user,
     refetchInterval: 60000, // Refresh every minute
   });
