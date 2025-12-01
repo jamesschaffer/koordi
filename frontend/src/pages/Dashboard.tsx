@@ -548,7 +548,7 @@ function Dashboard() {
 
                       {/* Description */}
                       {event.description && (
-                        <p className="text-sm text-muted-foreground mt-2">{event.description}</p>
+                        <p className="text-sm text-muted-foreground mt-2 line-clamp-2 break-words">{event.description}</p>
                       )}
                     </div>
                   </div>
@@ -570,7 +570,7 @@ function Dashboard() {
                             }
                             disabled={isAssigning}
                           >
-                            <SelectTrigger className="w-full md:w-64" disabled={isAssigning}>
+                            <SelectTrigger className="w-full md:w-64 h-auto min-h-[2.75rem] py-2 [&>span]:line-clamp-none" disabled={isAssigning}>
                               <SelectValue>
                                 {isAssigning ? (
                                   <div className="flex items-center gap-2">
@@ -578,21 +578,21 @@ function Dashboard() {
                                     <span className="text-muted-foreground">Updating...</span>
                                   </div>
                                 ) : event.assigned_to ? (
-                                  <div className="flex items-center gap-2">
-                                    <Avatar className="w-6 h-6">
+                                  <div className="flex items-center gap-2 pr-2">
+                                    <Avatar className="w-6 h-6 shrink-0">
                                       <AvatarImage src={event.assigned_to.avatar_url || undefined} alt={event.assigned_to.name} />
                                       <AvatarFallback className="text-xs">
                                         {event.assigned_to.name?.split(' ').map(n => n[0]).join('').toUpperCase() || '?'}
                                       </AvatarFallback>
                                     </Avatar>
-                                    <div className="flex flex-col items-start text-left">
+                                    <div className="flex flex-col items-start text-left min-w-0">
                                       <span className="text-sm font-medium leading-tight">{event.assigned_to.name}</span>
                                       <span className="text-xs text-muted-foreground leading-tight">{event.assigned_to.email}</span>
                                     </div>
                                   </div>
                                 ) : (
                                   <div className="flex items-center gap-2">
-                                    <div className="w-6 h-6 rounded-full bg-muted flex items-center justify-center">
+                                    <div className="w-6 h-6 rounded-full bg-muted flex items-center justify-center shrink-0">
                                       <User className="w-3 h-3 text-muted-foreground" />
                                     </div>
                                     <span className="text-muted-foreground">Unassigned</span>
