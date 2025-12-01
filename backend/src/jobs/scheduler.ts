@@ -6,9 +6,9 @@ import { cleanupExpiredInvitations } from '../services/invitationService';
  * Initialize periodic calendar sync jobs
  */
 export const initializeScheduler = () => {
-  // Schedule calendar sync every 15 minutes
-  // Cron pattern: */15 * * * * = every 15 minutes
-  cron.schedule('*/15 * * * *', async () => {
+  // Schedule calendar sync every 5 minutes
+  // Cron pattern: */5 * * * * = every 5 minutes
+  cron.schedule('*/5 * * * *', async () => {
     console.log('⏰ Scheduled sync triggered at', new Date().toISOString());
 
     try {
@@ -32,7 +32,7 @@ export const initializeScheduler = () => {
     }
   });
 
-  console.log('📅 Scheduler initialized: Calendar sync every 15 minutes');
+  console.log('📅 Scheduler initialized: Calendar sync every 5 minutes');
 
   // Schedule cleanup of expired invitations daily at 2 AM
   // Cron pattern: 0 2 * * * = every day at 2:00 AM
