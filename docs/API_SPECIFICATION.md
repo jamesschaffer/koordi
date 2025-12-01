@@ -977,22 +977,26 @@ Assign or reassign event to a parent.
 ```json
 {
   "assigned_to_user_id": "user-uuid",
-  "expected_version": 5
+  "expected_version": 5,
+  "skip": false
 }
 ```
 
 **Notes:**
 - Pass `null` for `assigned_to_user_id` to unassign
 - `expected_version` is optional for optimistic locking (race condition protection)
+- `skip` is optional: set to `true` to mark event as "Not Attending" (sets `is_skipped=true` and clears assignment)
+- When `skip=true`, `assigned_to_user_id` is ignored and set to `null`
 
 **Response:** `200 OK`
 Returns updated event object
 
 **Side Effects:**
 - Previous assignee's supplemental events handled (based on retention setting)
-- New assignee's supplemental events created
-- Google Calendar updated for assignees
-- WebSocket broadcast: EVENT_ASSIGNED or EVENT_UNASSIGNED
+- New assignee's supplemental events created (unless `skip=true`)
+- Google Calendar updated for all members (title reflects assignment/skip status)
+- WebSocket broadcast: EVENT_ASSIGNED or EVENT_UNASSIGNED (includes `is_skipped` in payload)
+- When `skip=true`: supplemental events deleted, Google Calendar title updated to "🚫 Not Attending - [Title]"
 
 **Errors:**
 - `404` - Event not found or access denied

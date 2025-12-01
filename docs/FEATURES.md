@@ -11,7 +11,7 @@ This document provides a comprehensive breakdown of core features in Koordi. Eac
 - **Edge Cases:** Exceptional scenarios and how they're handled
 - **Background Jobs:** Async processes triggered by this feature
 
-**Total Features:** 53 features across 6 major flows
+**Total Features:** 54 features across 6 major flows
 
 **Note:** Additional specialized flows (Event Calendar Management, Parent Member Management, Conflict Resolution) are documented in their respective flow specification files. See [EVENT_CAL_MGMT.md](./EVENT_CAL_MGMT.md), [PARENT_MEMBER_MGMT.md](./PARENT_MEMBER_MGMT.md), and [CONFLICT_RESOLUTION.md](./CONFLICT_RESOLUTION.md).
 
@@ -20,7 +20,7 @@ This document provides a comprehensive breakdown of core features in Koordi. Eac
 ## TABLE OF CONTENTS
 
 1. [Onboarding Flow](#onboarding-flow---feature-breakdown) (11 features)
-2. [Daily Use Flow](#daily-use-flow---feature-breakdown) (10 features)
+2. [Daily Use Flow](#daily-use-flow---feature-breakdown) (11 features)
 3. [Event Assignment/Transfer Flow](#event-assignmenttransfer-flow---feature-breakdown) (7 features)
 4. [Child Management Flow](#child-management-flow---feature-breakdown) (8 features)
 5. [Settings Flow](#settings-flow---feature-breakdown) (9 features)
@@ -600,7 +600,40 @@ This document provides a comprehensive breakdown of core features in Koordi. Eac
 
 ---
 
-### Feature 2.7: Calculate Departure and Return Times
+### Feature 2.7: Mark Event as "Not Attending"
+
+**User Action:**
+- User viewing event detail
+- User taps "Not Attending" button
+- Confirmation appears
+- User confirms they won't attend this event
+
+**Business Logic:**
+1. Update event record: Set `is_skipped = true` and `assigned_to_user_id = null`
+2. Increment event version (optimistic locking)
+3. Delete any existing supplemental events from database
+4. Update main event in ALL members' Google Calendars:
+   - Update title to "🚫 Not Attending - [Event Title]"
+   - Update description to reflect "Not attending - no action required"
+5. Delete supplemental events from previous assignee's Google Calendar (if any)
+6. Event excluded from "Unassigned" filter (doesn't count as unassigned)
+7. Event excluded from conflict detection for all users
+8. Broadcast WebSocket event: "event_assigned" with `is_skipped: true`
+9. Update UI: Event displays with "Not Attending" badge
+
+**Edge Cases:**
+- Event already marked as "Not Attending": No-op, show message
+- Multiple users try to mark simultaneously: First wins via optimistic locking
+- User marks then wants to undo: Can reassign event to self or another user (clears skip flag)
+- All-day events: Cannot be skipped (no "Not Attending" option shown)
+- Event in past: Allow marking as "Not Attending" for record keeping
+
+**Background Jobs:**
+- Google Calendar Sync Job (update all members' main events with "Not Attending" title)
+
+---
+
+### Feature 2.8: Calculate Departure and Return Times
 
 **User Action:**
 - (Automatic calculation triggered by event assignment, address change, or settings change)
@@ -1529,7 +1562,7 @@ This document provides a comprehensive breakdown of core features in Koordi. Eac
 ### Feature 6.1: Automatic ICS Sync (Scheduled Background Job)
 
 **User Action:**
-- (Automatic - scheduled job runs every 15 minutes)
+- (Automatic - scheduled job runs every 5 minutes)
 
 **Business Logic:**
 1. Fetch all Event Calendars with sync_enabled = true

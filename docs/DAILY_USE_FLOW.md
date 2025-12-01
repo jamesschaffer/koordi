@@ -181,6 +181,49 @@ Notification: None (not assigned to Tom)
 
 ---
 
+### "Not Attending" Status
+
+**When Parent Marks Event as "Not Attending":**
+
+Some events may not require any parent to attend. The "Not Attending" option allows parents to explicitly mark an event as one they won't be attending, without leaving it in the unassigned state.
+
+**System performs the following:**
+
+1. **Update Main Event in ALL members' Google Calendars:**
+```
+Title: 🚫 Not Attending - Emma - Soccer Practice
+Time: 5:30 PM - 6:30 PM
+Location: [Address]
+Description:
+  📅 Event Calendar: Emma's Soccer
+  👤 Child: Emma
+  🚫 Status: Not Attending
+
+  No action required - event marked as not attending.
+
+  [Original description from ICS]
+
+  Managed by [App Name]
+  [Deep link to app]
+
+Notification: None
+```
+
+2. **No Supplemental Events:** Drive times and early arrival events are not created
+
+3. **Excluded from Filters:**
+   - Not shown in "Unassigned Events" (it's decided, not pending)
+   - Not shown in "My Events" (no one is assigned)
+   - Visible in "Upcoming Events" with "Not Attending" badge
+   - Excluded from conflict detection for all users
+
+**Undoing "Not Attending":**
+- Any parent can assign the event to themselves or another parent
+- This clears the "Not Attending" status
+- Normal assignment flow proceeds (supplemental events created, etc.)
+
+---
+
 ### Reassignment Handling
 
 **When Event Reassigned from Jennifer to Tom:**

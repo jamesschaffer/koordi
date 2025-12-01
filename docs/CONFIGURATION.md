@@ -378,7 +378,7 @@ SENTRY_DSN="https://abc123@o456789.ingest.sentry.io/1234567"
 Background job intervals are currently hardcoded in the scheduler, not configurable via environment variables.
 
 **Actual Implementation (`src/jobs/scheduler.ts`):**
-- ICS sync: Every 15 minutes (hardcoded)
+- ICS sync: Every 5 minutes (hardcoded)
 - Invitation cleanup: Daily at 2 AM (hardcoded)
 
 **Not Implemented:**
