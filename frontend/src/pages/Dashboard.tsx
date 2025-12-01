@@ -30,7 +30,7 @@ function Dashboard() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const [filter, setFilter] = useState<'all' | 'unassigned' | 'mine'>('all');
+  const [filter, setFilter] = useState<'all' | 'unassigned' | 'mine' | 'skipped'>('all');
   const [selectedCalendar, setSelectedCalendar] = useState<string>('all');
   const [startDate, setStartDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [endDate, setEndDate] = useState<string>('');
@@ -62,6 +62,7 @@ function Dashboard() {
   });
 
   // Fetch events based on filters
+  // For 'skipped' filter, we fetch all events and filter client-side
   const { data: events, isLoading } = useQuery({
     queryKey: ['events', filter, selectedCalendar, startDate, endDate],
     queryFn: () =>
@@ -72,7 +73,25 @@ function Dashboard() {
         start_date: startDate || undefined,
         end_date: endDate || undefined,
       }),
+    // When skipped filter is active, we need all events to filter from
+    enabled: filter !== 'skipped',
   });
+
+  // Separate query for skipped filter - fetch all events
+  const { data: allEvents, isLoading: isLoadingAll } = useQuery({
+    queryKey: ['events', 'all-for-skipped', selectedCalendar, startDate, endDate],
+    queryFn: () =>
+      getEvents(token, {
+        calendar_id: selectedCalendar === 'all' ? undefined : selectedCalendar,
+        start_date: startDate || undefined,
+        end_date: endDate || undefined,
+      }),
+    enabled: filter === 'skipped',
+  });
+
+  // Use the appropriate events based on filter
+  const eventsData = filter === 'skipped' ? allEvents : events;
+  const eventsLoading = filter === 'skipped' ? isLoadingAll : isLoading;
 
   // Fetch unassigned count separately (for badge display, excludes past events)
   const { data: unassignedEvents } = useQuery({
@@ -87,6 +106,15 @@ function Dashboard() {
   });
 
   const unassignedCount = unassignedEvents?.length || 0;
+
+  // Filter events client-side for 'skipped' filter
+  const filteredEvents = useMemo(() => {
+    if (!eventsData) return [];
+    if (filter === 'skipped') {
+      return eventsData.filter((event) => event.is_skipped);
+    }
+    return eventsData;
+  }, [eventsData, filter]);
 
   // Assignment mutation with optimistic locking
   const assignMutation = useMutation({
@@ -244,10 +272,10 @@ function Dashboard() {
   // Detect conflicts between events for the same assignee, including drive times
   // Excludes events marked as "Not Attending" (is_skipped)
   const eventsWithConflicts = useMemo(() => {
-    if (!events || events.length === 0) return {};
+    if (!eventsData || eventsData.length === 0) return {};
 
     // Group events by assignee, excluding skipped events
-    const eventsByAssignee = events.reduce((acc, event) => {
+    const eventsByAssignee = eventsData.reduce((acc, event) => {
       // Skip events marked as "Not Attending"
       if (event.is_skipped) return acc;
 
@@ -341,7 +369,7 @@ function Dashboard() {
     });
 
     return conflicts;
-  }, [events]);
+  }, [eventsData]);
 
   const formatDateTime = (dateString: string, isAllDay: boolean) => {
     const date = new Date(dateString);
@@ -361,7 +389,7 @@ function Dashboard() {
     });
   };
 
-  if (isLoading) {
+  if (eventsLoading) {
     return (
       <div className="flex justify-center py-12">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
@@ -398,6 +426,12 @@ function Dashboard() {
                 variant={filter === 'mine' ? 'default' : 'outline'}
               >
                 My Events
+              </Button>
+              <Button
+                onClick={() => setFilter('skipped')}
+                variant={filter === 'skipped' ? 'default' : 'outline'}
+              >
+                Not Attending
               </Button>
               <Button
                 onClick={() => setFilter('all')}
@@ -465,7 +499,7 @@ function Dashboard() {
       </Card>
 
       {/* Events List */}
-      {!events || events.length === 0 ? (
+      {filteredEvents.length === 0 ? (
         <Card className="text-center py-12">
           <CardContent className="pt-6">
             {(!calendars || calendars.length === 0) ? (
@@ -484,6 +518,8 @@ function Dashboard() {
                     ? 'No upcoming events in your calendars'
                     : filter === 'unassigned'
                     ? 'All events are currently assigned'
+                    : filter === 'skipped'
+                    ? 'No events marked as Not Attending'
                     : 'You have no assigned events'}
                 </p>
               </>
@@ -497,13 +533,13 @@ function Dashboard() {
               📅 Please assign who is responsible for these events
             </p>
           )}
-          {events.map((event: Event, index: number) => {
+          {filteredEvents.map((event: Event, index: number) => {
             const conflicts = eventsWithConflicts as Record<string, string[]>;
             const hasConflict = conflicts[event.id]?.length > 0;
             const conflictingEventIds = conflicts[event.id] || [];
 
             // Find the next event in the list
-            const nextEvent = index < events.length - 1 ? events[index + 1] : null;
+            const nextEvent = index < filteredEvents.length - 1 ? filteredEvents[index + 1] : null;
             const showConflictBetween = nextEvent && conflictingEventIds.includes(nextEvent.id);
 
             return (
