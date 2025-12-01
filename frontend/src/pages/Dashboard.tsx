@@ -408,7 +408,7 @@ function Dashboard() {
         <CardContent className="pt-6">
           <div className="space-y-4">
             {/* Filter tabs */}
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <Button
                 onClick={() => setFilter('unassigned')}
                 variant={filter === 'unassigned' ? 'default' : 'outline'}
