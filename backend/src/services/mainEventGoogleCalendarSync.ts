@@ -82,14 +82,19 @@ export async function syncMainEventToGoogleCalendar(
     // Get Google Calendar client (may throw ConfigurationError or AuthenticationError)
     const calendar = await getGoogleCalendarClient(userId);
 
-    // Build dynamic title based on assignment status
+    // Build dynamic title based on skip/assignment status
     let eventTitle: string;
     let assignmentLine: string;
 
     console.log(`[syncMainEventToGoogleCalendar] Building title for event ${eventId}`);
     console.log(`  assigned_to:`, event.assigned_to);
+    console.log(`  is_skipped:`, event.is_skipped);
 
-    if (event.assigned_to && event.assigned_to.name) {
+    if (event.is_skipped) {
+      // Event is marked as "Not Attending"
+      eventTitle = `🚫 Not Attending - ${event.title}`;
+      assignmentLine = `Not attending - no action required`;
+    } else if (event.assigned_to && event.assigned_to.name) {
       const firstName = event.assigned_to.name.split(' ')[0];
       eventTitle = `${firstName} handling - ${event.title}`;
       assignmentLine = `${firstName} is handling this event`;

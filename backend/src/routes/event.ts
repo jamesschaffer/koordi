@@ -111,7 +111,8 @@ router.get('/:id', async (req: Request, res: Response) => {
  * Assign or unassign an event with optimistic locking
  * Body: {
  *   assigned_to_user_id: string | null,
- *   expected_version?: number  // Optional version for race condition protection
+ *   expected_version?: number,  // Optional version for race condition protection
+ *   skip?: boolean  // Optional flag to mark as "Not Attending"
  * }
  */
 router.patch('/:id/assign', async (req: Request, res: Response) => {
@@ -121,26 +122,28 @@ router.patch('/:id/assign', async (req: Request, res: Response) => {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    const { assigned_to_user_id, expected_version } = req.body;
+    const { assigned_to_user_id, expected_version, skip } = req.body;
 
     const event = await eventService.assignEvent(
       req.params.id,
       userId,
       assigned_to_user_id,
-      expected_version // Pass version for optimistic locking
+      expected_version, // Pass version for optimistic locking
+      skip // Pass skip flag for "Not Attending"
     );
 
     // Broadcast assignment change to all calendar members via WebSocket
     const io = req.app.get('io');
     if (io) {
-      const socketEvent = assigned_to_user_id
+      const socketEvent = event.assigned_to_user_id
         ? SocketEvent.EVENT_ASSIGNED
         : SocketEvent.EVENT_UNASSIGNED;
 
       emitToCalendar(io, event.event_calendar_id, socketEvent, {
         event_id: event.id,
         event_title: event.title,
-        assigned_to_user_id,
+        assigned_to_user_id: event.assigned_to_user_id,
+        is_skipped: event.is_skipped,
         start_time: event.start_time,
         end_time: event.end_time,
         event_calendar_id: event.event_calendar_id,
