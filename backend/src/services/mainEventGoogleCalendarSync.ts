@@ -86,6 +86,9 @@ export async function syncMainEventToGoogleCalendar(
     let eventTitle: string;
     let assignmentLine: string;
 
+    console.log(`[syncMainEventToGoogleCalendar] Building title for event ${eventId}`);
+    console.log(`  assigned_to:`, event.assigned_to);
+
     if (event.assigned_to && event.assigned_to.name) {
       const firstName = event.assigned_to.name.split(' ')[0];
       eventTitle = `${firstName} handling - ${event.title}`;
@@ -94,6 +97,8 @@ export async function syncMainEventToGoogleCalendar(
       eventTitle = `❓ Unassigned - ${event.title}`;
       assignmentLine = `This event is unassigned`;
     }
+
+    console.log(`  Final eventTitle: "${eventTitle}"`);
 
     // Build description with assignment info and Koordie link
     const koordieLine = `Update event assignment in Koordie: https://app.koordie.com`;
