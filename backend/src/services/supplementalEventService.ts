@@ -78,7 +78,11 @@ export async function createSupplementalEvents(
     user.comfort_buffer_minutes
   );
 
-  console.log(`Event ${event.title}: Using ${arrivalInfo.source} buffer of ${arrivalInfo.bufferMinutes} minutes`);
+  if (arrivalInfo.source === 'parsed') {
+    console.log(`Event ${event.title}: Parsed arrival time from description, total buffer = ${arrivalInfo.bufferMinutes} min (includes ${arrivalInfo.comfortBufferMinutes} min comfort buffer)`);
+  } else {
+    console.log(`Event ${event.title}: No arrival time in description, using default buffer of ${arrivalInfo.bufferMinutes} minutes`);
+  }
 
   // Get event location coordinates (geocode if needed)
   let eventCoordinates: Coordinates;
