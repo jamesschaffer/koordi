@@ -1,4 +1,5 @@
 import express, { Request, Response } from 'express';
+import crypto from 'crypto';
 import { google } from 'googleapis';
 import { generateToken } from '../utils/jwt';
 import { findOrCreateUser, GoogleUserProfile } from '../services/userService';
@@ -6,6 +7,21 @@ import { authenticateToken } from '../middleware/auth';
 import { autoAcceptPendingInvitations } from '../services/invitationService';
 
 const router = express.Router();
+
+// In-memory store for OAuth state tokens (short-lived, 10 minutes)
+// In production with multiple instances, use Redis instead
+const oauthStateStore = new Map<string, { timestamp: number }>();
+
+// Clean up expired states every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  const TEN_MINUTES = 10 * 60 * 1000;
+  for (const [state, data] of oauthStateStore.entries()) {
+    if (now - data.timestamp > TEN_MINUTES) {
+      oauthStateStore.delete(state);
+    }
+  }
+}, 5 * 60 * 1000);
 
 // Initialize Google OAuth client
 const oauth2Client = new google.auth.OAuth2(
@@ -32,14 +48,21 @@ const SCOPES = [
  * The trade-off: Users will see the consent screen every time they log in, but this
  * guarantees the application will work correctly. Without this, returning users
  * would not have their events synced to Google Calendar.
+ *
+ * SECURITY: Uses state parameter to prevent CSRF attacks on OAuth flow.
  */
 router.get('/google', (req: Request, res: Response) => {
+  // Generate cryptographically secure state token for CSRF protection
+  const state = crypto.randomBytes(32).toString('hex');
+  oauthStateStore.set(state, { timestamp: Date.now() });
+
   const authUrl = oauth2Client.generateAuthUrl({
     access_type: 'offline',
     scope: SCOPES,
     // Always use 'consent' to ensure we get a refresh token
     // This is critical for Google Calendar sync to work
     prompt: 'consent',
+    state: state, // CSRF protection
   });
 
   res.json({ url: authUrl });
@@ -48,10 +71,37 @@ router.get('/google', (req: Request, res: Response) => {
 /**
  * GET /api/auth/google/callback
  * Handles Google OAuth callback
+ *
+ * SECURITY: Validates state parameter to prevent CSRF attacks.
  */
 router.get('/google/callback', async (req: Request, res: Response) => {
   try {
-    const { code } = req.query;
+    const { code, state } = req.query;
+
+    // Validate state parameter (CSRF protection)
+    if (!state || typeof state !== 'string') {
+      console.error('OAuth callback: Missing state parameter');
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+      return res.redirect(`${frontendUrl}/auth/error?message=Invalid authentication request`);
+    }
+
+    const storedState = oauthStateStore.get(state);
+    if (!storedState) {
+      console.error('OAuth callback: Invalid or expired state parameter');
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+      return res.redirect(`${frontendUrl}/auth/error?message=Authentication session expired. Please try again.`);
+    }
+
+    // Remove used state (single-use)
+    oauthStateStore.delete(state);
+
+    // Check if state is expired (10 minutes)
+    const TEN_MINUTES = 10 * 60 * 1000;
+    if (Date.now() - storedState.timestamp > TEN_MINUTES) {
+      console.error('OAuth callback: State parameter expired');
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+      return res.redirect(`${frontendUrl}/auth/error?message=Authentication session expired. Please try again.`);
+    }
 
     if (!code || typeof code !== 'string') {
       return res.status(400).json({ error: 'Authorization code missing' });
