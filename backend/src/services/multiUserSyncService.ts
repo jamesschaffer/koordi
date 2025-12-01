@@ -83,10 +83,16 @@ export async function getSupplementalEventViewers(
  * @param eventId - The event ID
  */
 export async function syncMainEventToAllMembers(eventId: string): Promise<void> {
-  // Step 1: Fetch event with calendar info (1 query)
+  // Step 1: Fetch event with calendar info and assigned user (1 query)
   const event = await prisma.event.findUnique({
     where: { id: eventId },
     include: {
+      assigned_to: {
+        select: {
+          id: true,
+          name: true,
+        },
+      },
       event_calendar: {
         include: {
           child: true,

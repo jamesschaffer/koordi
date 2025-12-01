@@ -36,13 +36,19 @@ export async function syncMainEventToGoogleCalendar(
     let existingSync = context?.existingSync;
 
     if (!event) {
-      // Fetch the event with all details
+      // Fetch the event with all details including assigned user
       event = await prisma.event.findUnique({
         where: { id: eventId },
         include: {
           event_calendar: {
             include: {
               child: true,
+            },
+          },
+          assigned_to: {
+            select: {
+              id: true,
+              name: true,
             },
           },
         },
@@ -76,10 +82,28 @@ export async function syncMainEventToGoogleCalendar(
     // Get Google Calendar client (may throw ConfigurationError or AuthenticationError)
     const calendar = await getGoogleCalendarClient(userId);
 
+    // Build dynamic title based on assignment status
+    let eventTitle: string;
+    let assignmentLine: string;
+
+    if (event.assigned_to && event.assigned_to.name) {
+      const firstName = event.assigned_to.name.split(' ')[0];
+      eventTitle = `${firstName} handling - ${event.title}`;
+      assignmentLine = `${firstName} is handling this event`;
+    } else {
+      eventTitle = `❓ Unassigned - ${event.title}`;
+      assignmentLine = `This event is unassigned`;
+    }
+
+    // Build description with assignment info and Koordie link
+    const koordieLine = `Update event assignment in Koordie: https://app.koordie.com`;
+    const originalDescription = event.description || '';
+    const eventDescription = `${assignmentLine}\n${koordieLine}\n\n${originalDescription}\n\nChild: ${event.event_calendar.child.name}\nCalendar: ${event.event_calendar.name}`;
+
     // Format event for Google Calendar
     const eventBody: any = {
-      summary: event.title,
-      description: `${event.description || ''}\n\nChild: ${event.event_calendar.child.name}\nCalendar: ${event.event_calendar.name}`,
+      summary: eventTitle,
+      description: eventDescription,
       location: event.location || undefined,
       colorId: '9', // Blue color for main events
       reminders: {
