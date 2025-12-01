@@ -4,6 +4,7 @@ import { toZonedTime } from 'date-fns-tz';
 export interface ArrivalTimeInfo {
   arrivalTime: Date;
   bufferMinutes: number;
+  comfortBufferMinutes: number;
   source: 'parsed' | 'default';
 }
 
@@ -11,20 +12,32 @@ export interface ArrivalTimeInfo {
  * Parse arrival time from TeamSnap event description
  * Example format: "(Arrival Time: 1:30 PM (Eastern Time (US & Canada)))"
  *
+ * When an arrival time is parsed from the description:
+ * - The parsed arrival time represents when the team/coach expects you to arrive
+ * - The comfort buffer is ADDED on top of this, so you arrive even earlier
+ * - Example: If event description says "Arrival Time: 1:30 PM" and comfort buffer is 5 min,
+ *   the effective arrival time becomes 1:25 PM
+ *
+ * When no arrival time is found in the description:
+ * - The comfort buffer is subtracted from the event start time as the arrival time
+ *
  * @param description - Event description that may contain arrival time
  * @param eventStartTime - The event's actual start time
- * @param defaultBufferMinutes - Fallback buffer if parsing fails (user's comfort_buffer_minutes)
- * @returns ArrivalTimeInfo with parsed or default buffer
+ * @param comfortBufferMinutes - User's comfort buffer (always added on top of arrival time)
+ * @returns ArrivalTimeInfo with parsed or default buffer, plus comfort buffer applied
  */
 export function parseArrivalTime(
   description: string | null | undefined,
   eventStartTime: Date,
-  defaultBufferMinutes: number
+  comfortBufferMinutes: number
 ): ArrivalTimeInfo {
   if (!description) {
+    // No description, use event start time minus comfort buffer
+    const arrivalTime = new Date(eventStartTime.getTime() - comfortBufferMinutes * 60000);
     return {
-      arrivalTime: new Date(eventStartTime.getTime() - defaultBufferMinutes * 60000),
-      bufferMinutes: defaultBufferMinutes,
+      arrivalTime,
+      bufferMinutes: comfortBufferMinutes,
+      comfortBufferMinutes,
       source: 'default',
     };
   }
@@ -36,9 +49,12 @@ export function parseArrivalTime(
     const match = description.match(arrivalTimeRegex);
 
     if (!match) {
+      // No arrival time found in description, use event start time minus comfort buffer
+      const arrivalTime = new Date(eventStartTime.getTime() - comfortBufferMinutes * 60000);
       return {
-        arrivalTime: new Date(eventStartTime.getTime() - defaultBufferMinutes * 60000),
-        bufferMinutes: defaultBufferMinutes,
+        arrivalTime,
+        bufferMinutes: comfortBufferMinutes,
+        comfortBufferMinutes,
         source: 'default',
       };
     }
@@ -55,31 +71,46 @@ export function parseArrivalTime(
 
     // Parse the time in the event's timezone
     const parsedTime = parse(dateTimeString, 'yyyy-MM-dd h:mm a', new Date());
-    const arrivalTime = toZonedTime(parsedTime, timezone);
+    const zonedArrivalTime = toZonedTime(parsedTime, timezone);
 
-    // Calculate buffer in minutes
-    const bufferMinutes = differenceInMinutes(eventStartTime, arrivalTime);
+    // Calculate the buffer from the parsed arrival time to event start (before adding comfort buffer)
+    const parsedBufferMinutes = differenceInMinutes(eventStartTime, zonedArrivalTime);
 
-    // Sanity check: buffer should be positive and reasonable (0-120 minutes)
-    if (bufferMinutes < 0 || bufferMinutes > 120) {
-      console.warn(`Parsed buffer ${bufferMinutes} minutes is out of range, using default`);
+    // Sanity check: parsed buffer should be positive and reasonable (0-120 minutes)
+    if (parsedBufferMinutes < 0 || parsedBufferMinutes > 120) {
+      console.warn(`Parsed buffer ${parsedBufferMinutes} minutes is out of range, using default`);
+      const defaultArrivalTime = new Date(eventStartTime.getTime() - comfortBufferMinutes * 60000);
       return {
-        arrivalTime: new Date(eventStartTime.getTime() - defaultBufferMinutes * 60000),
-        bufferMinutes: defaultBufferMinutes,
+        arrivalTime: defaultArrivalTime,
+        bufferMinutes: comfortBufferMinutes,
+        comfortBufferMinutes,
         source: 'default',
       };
     }
 
+    // Apply comfort buffer ON TOP of the parsed arrival time
+    // If description says "Arrival Time: 1:30 PM" and comfort buffer is 5 min,
+    // effective arrival time becomes 1:25 PM
+    const effectiveArrivalTime = new Date(zonedArrivalTime.getTime() - comfortBufferMinutes * 60000);
+
+    // Total buffer is parsed buffer + comfort buffer
+    const totalBufferMinutes = parsedBufferMinutes + comfortBufferMinutes;
+
+    console.log(`Parsed arrival time: ${zonedArrivalTime.toISOString()}, adding ${comfortBufferMinutes}min comfort buffer, effective arrival: ${effectiveArrivalTime.toISOString()}`);
+
     return {
-      arrivalTime,
-      bufferMinutes,
+      arrivalTime: effectiveArrivalTime,
+      bufferMinutes: totalBufferMinutes,
+      comfortBufferMinutes,
       source: 'parsed',
     };
   } catch (error) {
     console.error('Error parsing arrival time:', error);
+    const arrivalTime = new Date(eventStartTime.getTime() - comfortBufferMinutes * 60000);
     return {
-      arrivalTime: new Date(eventStartTime.getTime() - defaultBufferMinutes * 60000),
-      bufferMinutes: defaultBufferMinutes,
+      arrivalTime,
+      bufferMinutes: comfortBufferMinutes,
+      comfortBufferMinutes,
       source: 'default',
     };
   }
