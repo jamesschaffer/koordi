@@ -52,6 +52,7 @@ export const getUserEvents = async (userId: string, filters?: {
 
   if (filters?.unassignedOnly) {
     where.assigned_to_user_id = null;
+    where.is_skipped = false; // Exclude "Not Attending" events from unassigned filter
   } else if (filters?.assignedToMe) {
     where.assigned_to_user_id = userId;
   }
@@ -182,12 +183,14 @@ export const getEventById = async (eventId: string, userId: string) => {
  * @param userId - The user making the assignment (for access control)
  * @param assignToUserId - The user to assign the event to (null to unassign)
  * @param expectedVersion - Optional version number for optimistic locking (prevents race conditions)
+ * @param skip - Optional flag to mark event as "Not Attending" (skipped)
  */
 export const assignEvent = async (
   eventId: string,
   userId: string,
   assignToUserId: string | null,
-  expectedVersion?: number
+  expectedVersion?: number,
+  skip?: boolean
 ) => {
   // Verify user has access to this event
   const event = await getEventById(eventId, userId);
@@ -213,9 +216,16 @@ export const assignEvent = async (
 
   // Get previous assignment for Google Calendar cleanup
   const previousAssignedUserId = event.assigned_to_user_id;
+  const wasSkipped = event.is_skipped;
 
   // Use the current version for the atomic update (if expectedVersion not provided)
   const versionForUpdate = expectedVersion !== undefined ? expectedVersion : event.version;
+
+  // Determine the new skip state
+  // If skip is explicitly true, mark as skipped and clear assignment
+  // If assigning to a user or explicitly setting skip to false, clear skip state
+  const newIsSkipped = skip === true;
+  const newAssignedUserId = newIsSkipped ? null : assignToUserId;
 
   // Update assignment with optimistic locking (atomic check-and-set)
   const updatedEvent = await prisma.event.update({
@@ -224,7 +234,8 @@ export const assignEvent = async (
       version: versionForUpdate, // Atomic: only update if version matches
     },
     data: {
-      assigned_to_user_id: assignToUserId,
+      assigned_to_user_id: newAssignedUserId,
+      is_skipped: newIsSkipped,
       version: { increment: 1 }, // Atomic version increment
     },
     include: {
@@ -247,7 +258,7 @@ export const assignEvent = async (
   // Handle Google Calendar sync for main event
   // Main events are synced to ALL calendar members (not just assigned user)
   try {
-    // Sync to all calendar members
+    // Sync to all calendar members (title will reflect skip/assignment status)
     await syncMainEventToAllMembers(eventId);
   } catch (error) {
     console.error('Failed to sync main event to all calendar members:', error);
@@ -255,11 +266,19 @@ export const assignEvent = async (
   }
 
   // Handle supplemental events (drive-to and drive-home)
-  // This runs asynchronously and won't fail the assignment if it errors
+  // If event is being skipped: delete existing supplemental events, don't create new ones
+  // If event is being assigned: create new supplemental events
+  // If event is being unassigned (not skipped): delete existing supplemental events
   try {
-    await handleEventReassignment(eventId, previousAssignedUserId, assignToUserId);
+    if (newIsSkipped) {
+      // Event is being skipped - delete all supplemental events
+      await handleEventReassignment(eventId, previousAssignedUserId, null);
+    } else {
+      // Normal assignment/unassignment flow
+      await handleEventReassignment(eventId, previousAssignedUserId, newAssignedUserId);
+    }
   } catch (error) {
-    console.error('Failed to create supplemental events:', error);
+    console.error('Failed to handle supplemental events:', error);
     // Don't throw - supplemental events are optional and shouldn't fail the assignment
     // Common reasons: user has no home address, event has no location, Maps API errors
   }
@@ -324,10 +343,12 @@ export const checkEventConflicts = async (
   }
 
   // Find all main events assigned to the target user that overlap with the effective time window
+  // Exclude skipped events from conflict detection
   const eventConflicts = await prisma.event.findMany({
     where: {
       id: { not: eventId }, // Exclude the event itself
       assigned_to_user_id: assignToUserId,
+      is_skipped: false, // Exclude "Not Attending" events
       OR: [
         // Event starts during this window
         {
@@ -366,10 +387,12 @@ export const checkEventConflicts = async (
 
   // Find all supplemental events (drive times) for other events assigned to this user
   // that overlap with the effective time window
+  // Exclude supplemental events from skipped parent events
   const supplementalConflicts = await prisma.supplementalEvent.findMany({
     where: {
       parent_event: {
         assigned_to_user_id: assignToUserId,
+        is_skipped: false, // Exclude "Not Attending" events
       },
       OR: [
         // Supplemental event starts during this window

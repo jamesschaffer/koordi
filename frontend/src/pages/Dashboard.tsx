@@ -8,7 +8,8 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { Calendar, MapPin, User, AlertTriangle, Loader2 } from 'lucide-react';
+import { Calendar, MapPin, User, AlertTriangle, Loader2, Ban } from 'lucide-react';
+import { Separator } from '@/components/ui/separator';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Input } from '@/components/ui/input';
 import { useToast } from '@/hooks/use-toast';
@@ -89,12 +90,13 @@ function Dashboard() {
 
   // Assignment mutation with optimistic locking
   const assignMutation = useMutation({
-    mutationFn: ({ eventId, userId, expectedVersion }: {
+    mutationFn: ({ eventId, userId, expectedVersion, skip }: {
       eventId: string;
       userId: string | null;
       expectedVersion: number;
+      skip?: boolean;
     }) =>
-      assignEvent(eventId, userId, expectedVersion, token),
+      assignEvent(eventId, userId, expectedVersion, token, skip),
     onSuccess: () => {
       setPendingAssignmentEventId(null);
       queryClient.invalidateQueries({ queryKey: ['events'] });
@@ -154,7 +156,7 @@ function Dashboard() {
   });
 
   // Handle assignment with conflict check and optimistic locking
-  const handleAssign = async (eventId: string, userId: string | null) => {
+  const handleAssign = async (eventId: string, userId: string | null, skip?: boolean) => {
     // Find the event to get its version
     const event = events?.find((e) => e.id === eventId);
     if (!event) {
@@ -168,6 +170,12 @@ function Dashboard() {
 
     // Set loading state immediately
     setPendingAssignmentEventId(eventId);
+
+    // If marking as "Not Attending", no conflict check needed
+    if (skip) {
+      assignMutation.mutate({ eventId, userId: null, expectedVersion: event.version, skip: true });
+      return;
+    }
 
     if (userId) {
       try {
@@ -185,7 +193,7 @@ function Dashboard() {
             assigneeName: assignee?.name || assignee?.email,
             onConfirm: () => {
               setPendingAssignmentEventId(eventId);
-              assignMutation.mutate({ eventId, userId, expectedVersion: event.version });
+              assignMutation.mutate({ eventId, userId, expectedVersion: event.version, skip: false });
             },
           });
           return;
@@ -196,7 +204,7 @@ function Dashboard() {
         return;
       }
     }
-    assignMutation.mutate({ eventId, userId, expectedVersion: event.version });
+    assignMutation.mutate({ eventId, userId, expectedVersion: event.version, skip: false });
   };
 
   // Get unique members from all calendars
@@ -234,11 +242,15 @@ function Dashboard() {
   };
 
   // Detect conflicts between events for the same assignee, including drive times
+  // Excludes events marked as "Not Attending" (is_skipped)
   const eventsWithConflicts = useMemo(() => {
     if (!events || events.length === 0) return {};
 
-    // Group events by assignee
+    // Group events by assignee, excluding skipped events
     const eventsByAssignee = events.reduce((acc, event) => {
+      // Skip events marked as "Not Attending"
+      if (event.is_skipped) return acc;
+
       if (event.assigned_to_user_id) {
         if (!acc[event.assigned_to_user_id]) {
           acc[event.assigned_to_user_id] = [];
@@ -503,17 +515,23 @@ function Dashboard() {
                         <div className="flex items-center gap-3 mb-4">
                           <div
                             className="w-1 h-12 rounded-full shrink-0"
-                            style={{ backgroundColor: event.event_calendar.color }}
+                            style={{ backgroundColor: event.is_skipped ? '#9ca3af' : event.event_calendar.color }}
                           />
                           <div className="flex-1">
                             <div className="flex items-center gap-2 flex-wrap">
-                              <CardTitle className="text-lg">{event.title}</CardTitle>
+                              <CardTitle className={`text-lg ${event.is_skipped ? 'text-gray-500 line-through' : ''}`}>{event.title}</CardTitle>
+                              {event.is_skipped && (
+                                <Badge variant="secondary" className="bg-gray-200 text-gray-600 dark:bg-gray-700 dark:text-gray-300">
+                                  <Ban className="w-3 h-3 mr-1" />
+                                  Not Attending
+                                </Badge>
+                              )}
                               {event.is_all_day && (
                                 <Badge variant="secondary" className="bg-gray-200 text-gray-700">
                                   All Day
                                 </Badge>
                               )}
-                              {hasConflict && (
+                              {hasConflict && !event.is_skipped && (
                                 <Badge variant="destructive" className="bg-amber-600">
                                   <AlertTriangle className="w-3 h-3 mr-1" />
                                   Conflict
@@ -555,81 +573,100 @@ function Dashboard() {
 
                   {/* Assignment Controls */}
                   <div className="w-full md:w-auto md:ml-4 flex flex-col gap-2 items-stretch md:items-end">
-                    {event.is_all_day ? (
-                      <div className="w-full md:w-64 px-3 py-2 text-sm text-muted-foreground bg-muted rounded-md text-center">
-                        Assignment not available for all-day events
-                      </div>
-                    ) : (
-                      (() => {
-                        const isAssigning = pendingAssignmentEventId === event.id;
-                        return (
-                          <Select
-                            value={event.assigned_to_user_id || 'unassigned'}
-                            onValueChange={(value) =>
-                              handleAssign(event.id, value === 'unassigned' ? null : value)
+                    {(() => {
+                      const isAssigning = pendingAssignmentEventId === event.id;
+                      // Determine current value for the select
+                      const currentValue = event.is_skipped
+                        ? 'not-attending'
+                        : event.assigned_to_user_id || 'unassigned';
+
+                      return (
+                        <Select
+                          value={currentValue}
+                          onValueChange={(value) => {
+                            if (value === 'not-attending') {
+                              handleAssign(event.id, null, true); // Skip = true
+                            } else {
+                              handleAssign(event.id, value === 'unassigned' ? null : value, false);
                             }
-                            disabled={isAssigning}
-                          >
-                            <SelectTrigger className="w-full md:w-64 h-auto min-h-[2.75rem] py-2 [&>span]:line-clamp-none" disabled={isAssigning}>
-                              <SelectValue>
-                                {isAssigning ? (
-                                  <div className="flex items-center gap-2">
-                                    <Loader2 className="w-4 h-4 animate-spin" />
-                                    <span className="text-muted-foreground">Updating...</span>
-                                  </div>
-                                ) : event.assigned_to ? (
-                                  <div className="flex items-center gap-2 pr-2">
-                                    <Avatar className="w-6 h-6 shrink-0">
-                                      <AvatarImage src={event.assigned_to.avatar_url || undefined} alt={event.assigned_to.name} />
-                                      <AvatarFallback className="text-xs">
-                                        {event.assigned_to.name?.split(' ').map(n => n[0]).join('').toUpperCase() || '?'}
-                                      </AvatarFallback>
-                                    </Avatar>
-                                    <div className="flex flex-col items-start text-left min-w-0">
-                                      <span className="text-sm font-medium leading-tight">{event.assigned_to.name}</span>
-                                      <span className="text-xs text-muted-foreground leading-tight">{event.assigned_to.email}</span>
-                                    </div>
-                                  </div>
-                                ) : (
-                                  <div className="flex items-center gap-2">
-                                    <div className="w-6 h-6 rounded-full bg-muted flex items-center justify-center shrink-0">
-                                      <User className="w-3 h-3 text-muted-foreground" />
-                                    </div>
-                                    <span className="text-muted-foreground">Unassigned</span>
-                                  </div>
-                                )}
-                              </SelectValue>
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="unassigned">
+                          }}
+                          disabled={isAssigning}
+                        >
+                          <SelectTrigger className={`w-full md:w-64 h-auto min-h-[2.75rem] py-2 [&>span]:line-clamp-none ${event.is_skipped ? 'bg-gray-100 dark:bg-gray-800' : ''}`} disabled={isAssigning}>
+                            <SelectValue>
+                              {isAssigning ? (
                                 <div className="flex items-center gap-2">
-                                  <div className="w-6 h-6 rounded-full bg-muted flex items-center justify-center">
+                                  <Loader2 className="w-4 h-4 animate-spin" />
+                                  <span className="text-muted-foreground">Updating...</span>
+                                </div>
+                              ) : event.is_skipped ? (
+                                <div className="flex items-center gap-2">
+                                  <div className="w-6 h-6 rounded-full bg-gray-200 dark:bg-gray-700 flex items-center justify-center shrink-0">
+                                    <Ban className="w-3 h-3 text-gray-500" />
+                                  </div>
+                                  <span className="text-gray-500">Not Attending</span>
+                                </div>
+                              ) : event.assigned_to ? (
+                                <div className="flex items-center gap-2 pr-2">
+                                  <Avatar className="w-6 h-6 shrink-0">
+                                    <AvatarImage src={event.assigned_to.avatar_url || undefined} alt={event.assigned_to.name} />
+                                    <AvatarFallback className="text-xs">
+                                      {event.assigned_to.name?.split(' ').map(n => n[0]).join('').toUpperCase() || '?'}
+                                    </AvatarFallback>
+                                  </Avatar>
+                                  <div className="flex flex-col items-start text-left min-w-0">
+                                    <span className="text-sm font-medium leading-tight">{event.assigned_to.name}</span>
+                                    <span className="text-xs text-muted-foreground leading-tight">{event.assigned_to.email}</span>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="flex items-center gap-2">
+                                  <div className="w-6 h-6 rounded-full bg-muted flex items-center justify-center shrink-0">
                                     <User className="w-3 h-3 text-muted-foreground" />
                                   </div>
-                                  <span>Unassigned</span>
+                                  <span className="text-muted-foreground">Unassigned</span>
+                                </div>
+                              )}
+                            </SelectValue>
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="unassigned">
+                              <div className="flex items-center gap-2">
+                                <div className="w-6 h-6 rounded-full bg-muted flex items-center justify-center">
+                                  <User className="w-3 h-3 text-muted-foreground" />
+                                </div>
+                                <span>Unassigned</span>
+                              </div>
+                            </SelectItem>
+                            {allMembers?.map((member) => (
+                              <SelectItem key={member.id} value={member.id}>
+                                <div className="flex items-center gap-2">
+                                  <Avatar className="w-6 h-6">
+                                    <AvatarImage src={member.avatar_url || undefined} alt={member.name} />
+                                    <AvatarFallback className="text-xs">
+                                      {member.name?.split(' ').map(n => n[0]).join('').toUpperCase() || '?'}
+                                    </AvatarFallback>
+                                  </Avatar>
+                                  <div className="flex flex-col items-start">
+                                    <span className="text-sm font-medium leading-tight">{member.name}</span>
+                                    <span className="text-xs text-muted-foreground leading-tight">{member.email}</span>
+                                  </div>
                                 </div>
                               </SelectItem>
-                              {allMembers?.map((member) => (
-                                <SelectItem key={member.id} value={member.id}>
-                                  <div className="flex items-center gap-2">
-                                    <Avatar className="w-6 h-6">
-                                      <AvatarImage src={member.avatar_url || undefined} alt={member.name} />
-                                      <AvatarFallback className="text-xs">
-                                        {member.name?.split(' ').map(n => n[0]).join('').toUpperCase() || '?'}
-                                      </AvatarFallback>
-                                    </Avatar>
-                                    <div className="flex flex-col items-start">
-                                      <span className="text-sm font-medium leading-tight">{member.name}</span>
-                                      <span className="text-xs text-muted-foreground leading-tight">{member.email}</span>
-                                    </div>
-                                  </div>
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        );
-                      })()
-                    )}
+                            ))}
+                            <Separator className="my-1" />
+                            <SelectItem value="not-attending">
+                              <div className="flex items-center gap-2">
+                                <div className="w-6 h-6 rounded-full bg-gray-200 dark:bg-gray-700 flex items-center justify-center">
+                                  <Ban className="w-3 h-3 text-gray-500" />
+                                </div>
+                                <span className="text-gray-500">Not Attending</span>
+                              </div>
+                            </SelectItem>
+                          </SelectContent>
+                        </Select>
+                      );
+                    })()}
                   </div>
                 </div>
               </CardContent>

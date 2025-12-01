@@ -20,6 +20,7 @@ export interface Event {
   start_time: string;
   end_time: string;
   is_all_day: boolean;
+  is_skipped: boolean; // True if marked as "Not Attending"
   assigned_to_user_id?: string;
   version: number; // For optimistic locking
   keep_supplemental_events?: boolean; // User's preference for showing supplemental events on calendar
@@ -101,13 +102,15 @@ export const assignEvent = (
   id: string,
   assignedToUserId: string | null,
   expectedVersion: number,
-  token: string
+  token: string,
+  skip?: boolean
 ) =>
   apiClient.patch<Event>(
     `/events/${id}/assign`,
     {
       assigned_to_user_id: assignedToUserId,
       expected_version: expectedVersion,
+      skip,
     },
     {
       headers: { Authorization: `Bearer ${token}` },

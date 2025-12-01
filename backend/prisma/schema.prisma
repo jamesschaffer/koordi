@@ -147,6 +147,7 @@ model Event {
   start_time            DateTime  @db.Timestamptz(6)
   end_time              DateTime  @db.Timestamptz(6)
   is_all_day            Boolean   @default(false)
+  is_skipped            Boolean   @default(false) // True if marked as "Not Attending"
   assigned_to_user_id   String?   @db.Uuid
   version               Int       @default(1) // Optimistic locking: increments on each assignment change
   last_modified         DateTime  @default(now()) @db.Timestamptz(6) // From ICS or update timestamp
