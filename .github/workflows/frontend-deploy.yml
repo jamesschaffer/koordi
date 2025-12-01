@@ -141,6 +141,12 @@ jobs:
             --allow-unauthenticated \
             --quiet
 
+          # Ensure traffic is routed to the latest revision
+          # This prevents issues where traffic gets stuck on an old revision
+          gcloud run services update-traffic ${{ env.SERVICE_NAME }} \
+            --region=${{ env.REGION }} \
+            --to-latest
+
       - name: Smoke Test Frontend
         run: |
           echo "⏳ Waiting for service to be ready..."

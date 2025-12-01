@@ -117,6 +117,12 @@ jobs:
             --update-secrets=SMTP_HOST=SMTP_HOST:latest,SMTP_PORT=SMTP_PORT:latest,SMTP_SECURE=SMTP_SECURE:latest,SMTP_USER=SMTP_USER:latest,SMTP_PASS=SMTP_PASS:latest,EMAIL_FROM=EMAIL_FROM:latest \
             --quiet
 
+          # Ensure traffic is routed to the latest revision
+          # This prevents issues where traffic gets stuck on an old revision
+          gcloud run services update-traffic ${{ env.SERVICE_NAME }} \
+            --region=${{ env.REGION }} \
+            --to-latest
+
       - name: Validate Configuration
         run: |
           echo "🔍 Validating production configuration..."
