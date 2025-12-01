@@ -1,6 +1,6 @@
 import axios from 'axios';
 import ical from 'node-ical';
-import { syncMainEventToAllMembers } from './multiUserSyncService';
+import { syncMainEventToAllMembers, deleteMainEventFromAllMembers, deleteSupplementalEventsFromAllMembers } from './multiUserSyncService';
 import { prisma } from '../lib/prisma';
 
 interface ParsedEvent {
@@ -197,6 +197,22 @@ export const syncCalendar = async (calendarId: string): Promise<{
 
     let eventsDeleted = 0;
     for (const event of eventsToDelete) {
+      console.log(`[icsSyncService] Deleting event "${event.title}" (${event.id}) - no longer in ICS feed`);
+
+      // CRITICAL: Delete from Google Calendar BEFORE deleting from database
+      // This ensures the sync records still exist so we know which Google events to delete
+      try {
+        // Delete supplemental events first (assignments like snacks, etc.)
+        await deleteSupplementalEventsFromAllMembers(event.id);
+        // Then delete main event from all members' Google Calendars
+        await deleteMainEventFromAllMembers(event.id);
+        console.log(`[icsSyncService] ✅ Deleted event from Google Calendar for all members`);
+      } catch (gcError: any) {
+        // Log but don't fail the sync - Google Calendar deletion is best-effort
+        console.error(`[icsSyncService] ⚠️ Failed to delete from Google Calendar:`, gcError.message);
+      }
+
+      // Now delete from Koordie database (this will cascade delete sync records)
       await prisma.event.delete({
         where: { id: event.id },
       });
