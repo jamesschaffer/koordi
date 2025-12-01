@@ -65,9 +65,15 @@ export function parseArrivalTime(
     // Map timezone strings to IANA timezone identifiers
     const timezone = mapTimezoneString(timezoneString);
 
-    // Parse the time string on the same date as the event
-    const eventDate = eventStartTime.toISOString().split('T')[0]; // Get YYYY-MM-DD
-    const dateTimeString = `${eventDate} ${timeString}`;
+    // IMPORTANT: Extract the date in the EVENT'S LOCAL TIMEZONE, not UTC
+    // Example: 8:30 PM EST Dec 1 is stored as 2025-12-02T01:30:00Z (Dec 2 in UTC)
+    // If we used UTC date (Dec 2), we'd parse "Dec 2 8:00 PM" instead of "Dec 1 8:00 PM"
+    const year = eventStartTime.toLocaleString('en-US', { timeZone: timezone, year: 'numeric' });
+    const month = eventStartTime.toLocaleString('en-US', { timeZone: timezone, month: '2-digit' });
+    const day = eventStartTime.toLocaleString('en-US', { timeZone: timezone, day: '2-digit' });
+    const eventDateLocal = `${year}-${month}-${day}`;
+
+    const dateTimeString = `${eventDateLocal} ${timeString}`;
 
     // Parse the time in the event's timezone
     const parsedTime = parse(dateTimeString, 'yyyy-MM-dd h:mm a', new Date());
@@ -123,12 +129,20 @@ function mapTimezoneString(timezoneString: string): string {
   const timezoneMap: Record<string, string> = {
     'Eastern Time (US & Canada)': 'America/New_York',
     'Eastern Time': 'America/New_York',
+    'EST': 'America/New_York',
+    'EDT': 'America/New_York',
     'Central Time (US & Canada)': 'America/Chicago',
     'Central Time': 'America/Chicago',
+    'CST': 'America/Chicago',
+    'CDT': 'America/Chicago',
     'Mountain Time (US & Canada)': 'America/Denver',
     'Mountain Time': 'America/Denver',
+    'MST': 'America/Denver',
+    'MDT': 'America/Denver',
     'Pacific Time (US & Canada)': 'America/Los_Angeles',
     'Pacific Time': 'America/Los_Angeles',
+    'PST': 'America/Los_Angeles',
+    'PDT': 'America/Los_Angeles',
     'Alaska Time': 'America/Anchorage',
     'Hawaii Time': 'Pacific/Honolulu',
     'Arizona Time': 'America/Phoenix',
