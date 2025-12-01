@@ -26,7 +26,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ ICS Sync runs (every 15 minutes)                            │
+│ ICS Sync runs (every 5 minutes)                             │
 └────────────────┬────────────────────────────────────────────┘
                  │
                  ▼
@@ -63,9 +63,10 @@
 | Action | Google Calendar Sync |
 |--------|---------------------|
 | **ICS sync runs** | Create/update main events in ALL calendar members' Google Calendars |
-| **Event assigned to user** | Create supplemental events (drive times, buffer) for assignee |
-| **Event reassigned** | Delete supplemental events from previous assignee, create for new assignee |
-| **Event unassigned** | Delete supplemental events from user's calendar |
+| **Event assigned to user** | Update title to "[Name] handling - [Title]", create supplemental events for assignee |
+| **Event reassigned** | Update title, delete supplemental events from previous assignee, create for new assignee |
+| **Event unassigned** | Update title to "❓ Unassigned - [Title]", delete supplemental events |
+| **Event marked "Not Attending"** | Update title to "🚫 Not Attending - [Title]", delete supplemental events |
 | **ICS feed event updated** | Update events in all members' calendars who have sync enabled |
 | **Event deleted from ICS** | Delete from all members' calendars via `UserGoogleEventSync` tracking |
 | **Member joins calendar** | Sync all existing events to their Google Calendar (on next ICS sync) |
@@ -271,11 +272,16 @@ POST https://www.googleapis.com/calendar/v3/calendars/{calendarId}/events (creat
 PUT https://www.googleapis.com/calendar/v3/calendars/{calendarId}/events/{eventId} (update)
 ```
 
+**Dynamic Title Formats:**
+- Assigned: `[FirstName] handling - [Event Title]` (e.g., "John handling - Soccer Practice")
+- Unassigned: `❓ Unassigned - [Event Title]`
+- Not Attending: `🚫 Not Attending - [Event Title]`
+
 **Request Body:**
 ```json
 {
-  "summary": "Soccer Practice",
-  "description": "Description here\n\nChild: Emma\nCalendar: Soccer Schedule",
+  "summary": "John handling - Soccer Practice",
+  "description": "John is handling this event\nUpdate event assignment in Koordie: https://app.koordie.com\n\nOriginal description...\n\nChild: Emma\nCalendar: Soccer Schedule",
   "location": "Lincoln Field, San Francisco, CA",
   "start": {
     "dateTime": "2024-03-20T16:00:00-07:00",
@@ -721,7 +727,7 @@ This adds significant complexity and may be deferred to post-MVP.
 
 **Direction:** Koordi → Google Calendar
 
-**Trigger:** ICS sync job (every 15 minutes) or event operations
+**Trigger:** ICS sync job (every 5 minutes) or event operations
 
 **Flow:**
 1. ICS sync job fetches and parses ICS feeds
@@ -1011,7 +1017,7 @@ describe('Google Calendar Integration', () => {
 
 ### Sync Strategy
 - [x] One-way sync (Koordi → Google Calendar)
-- [x] Triggered by ICS sync job (every 15 minutes)
+- [x] Triggered by ICS sync job (every 5 minutes)
 - [x] Per-user tracking via `UserGoogleEventSync` table
 - [x] Stale record detection and cleanup
 - [x] Batch-optimized queries to eliminate N+1

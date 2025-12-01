@@ -23,7 +23,7 @@
 
 Background jobs handle time-intensive or scheduled operations that shouldn't block HTTP requests:
 
-1. **ICS Sync Job:** Fetch and parse ICS feeds every 15 minutes (all calendars) or on-demand (single calendar)
+1. **ICS Sync Job:** Fetch and parse ICS feeds every 5 minutes (all calendars) or on-demand (single calendar)
 2. **Invitation Cleanup Job:** Remove expired invitations daily at 2 AM
 
 **Note:** Google Calendar sync is performed synchronously during ICS sync, not as separate background jobs.
@@ -105,7 +105,7 @@ Fetch and parse ICS feeds to import/update events, then sync to Google Calendar 
 
 ### Schedule
 
-**Frequency:** Every 15 minutes (all calendars) via `node-cron`
+**Frequency:** Every 5 minutes (all calendars) via `node-cron`
 **On Startup:** Initial sync job runs immediately
 
 ### Job Data Schema
@@ -180,8 +180,8 @@ import { icsSyncQueue } from '../config/queue';
 import { cleanupExpiredInvitations } from '../services/invitationService';
 
 export const initializeScheduler = () => {
-  // Schedule calendar sync every 15 minutes
-  cron.schedule('*/15 * * * *', async () => {
+  // Schedule calendar sync every 5 minutes
+  cron.schedule('*/5 * * * *', async () => {
     console.log('⏰ Scheduled sync triggered at', new Date().toISOString());
 
     try {
@@ -203,7 +203,7 @@ export const initializeScheduler = () => {
     }
   });
 
-  console.log('📅 Scheduler initialized: Calendar sync every 15 minutes');
+  console.log('📅 Scheduler initialized: Calendar sync every 5 minutes');
 
   // Initial sync on startup
   icsSyncQueue.add({ type: 'all' }, { /* retry options */ });
@@ -334,7 +334,7 @@ Potential additions for production:
 
 ### Current Implementation
 - ✅ Single Bull queue for ICS sync
-- ✅ node-cron scheduler for 15-minute sync intervals
+- ✅ node-cron scheduler for 5-minute sync intervals
 - ✅ Invitation cleanup daily at 2 AM
 - ✅ Retry with exponential backoff
 - ✅ Basic console logging

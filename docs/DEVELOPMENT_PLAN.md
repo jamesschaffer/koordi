@@ -290,7 +290,7 @@ mkdir backend frontend docs
 **Implementation:** `/backend/src/services/icsSyncService.ts`, `/backend/src/services/arrivalTimeParser.ts`
 
 **Step 3: Sync Scheduler**
-- ✅ Set up periodic sync (every 15 minutes)
+- ✅ Set up periodic sync (every 5 minutes)
 - ✅ Implement manual sync trigger
 - ✅ Add sync status tracking
 - ✅ Handle sync failures with retry logic
@@ -305,7 +305,7 @@ mkdir backend frontend docs
 - ✅ Bulk changes: Batch process efficiently
 
 **Deliverables:**
-✅ ICS feeds sync automatically every 15 minutes
+✅ ICS feeds sync automatically every 5 minutes
 ✅ Events created with all parsed details (title, location, dates, early arrival)
 ✅ Assignments preserved during updates
 ✅ Sync errors logged and reported
@@ -633,7 +633,7 @@ Return Home Time = Event End Time
 
 **Step 2: Job Types**
 
-**ICS Sync Job** ✅ COMPLETED (every 15 minutes per calendar)
+**ICS Sync Job** ✅ COMPLETED (every 5 minutes per calendar)
 - ✅ Fetch ICS feed
 - ✅ Parse and detect changes with node-ical
 - ✅ Update database (create/update/delete events)
@@ -663,7 +663,7 @@ Return Home Time = Event End Time
 - ⚠️ Tokens likely refreshed on-demand when API calls fail
 
 **Step 3: Job Scheduling** ✅ COMPLETED
-- ✅ Set up cron-like schedules (every 15 minutes for ICS sync)
+- ✅ Set up cron-like schedules (every 5 minutes for ICS sync)
 - ✅ Job event handlers (waiting, active, completed, failed)
 - ✅ User-triggered manual sync available
 
