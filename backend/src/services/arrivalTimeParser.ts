@@ -48,6 +48,13 @@ export function parseArrivalTime(
     const arrivalTimeRegex = /\(Arrival Time:\s*(\d{1,2}:\d{2}\s*(?:AM|PM))\s*\(([^)]+)\)\)/i;
     const match = description.match(arrivalTimeRegex);
 
+    // DEBUG: Log parsing attempt
+    console.log(`[parseArrivalTime] Description (${description.length} chars): ${JSON.stringify(description.substring(0, 200))}`);
+    console.log(`[parseArrivalTime] Regex match result: ${match ? 'MATCHED' : 'NO MATCH'}`);
+    if (match) {
+      console.log(`[parseArrivalTime] Captured time: "${match[1]}", timezone: "${match[2]}"`);
+    }
+
     if (!match) {
       // No arrival time found in description, use event start time minus comfort buffer
       const arrivalTime = new Date(eventStartTime.getTime() - comfortBufferMinutes * 60000);
