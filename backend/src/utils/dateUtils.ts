@@ -35,3 +35,24 @@ export function parseDateInTimezone(
  * Falls back to America/New_York as a reasonable US default
  */
 export const DEFAULT_TIMEZONE = 'America/New_York';
+
+/**
+ * Get the start of today (midnight) in a specific timezone as a UTC Date
+ *
+ * @param timezone - IANA timezone string (e.g., "America/New_York")
+ * @returns Date object in UTC representing midnight today in the given timezone
+ */
+export function getStartOfTodayInTimezone(timezone: string): Date {
+  // Get current date parts in the specified timezone
+  const now = new Date();
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  const dateString = formatter.format(now); // Returns YYYY-MM-DD
+
+  // Convert that midnight in the timezone back to UTC
+  return fromZonedTime(`${dateString}T00:00:00.000`, timezone);
+}

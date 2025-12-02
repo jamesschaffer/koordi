@@ -2,6 +2,7 @@ import axios from 'axios';
 import ical from 'node-ical';
 import { syncMainEventToAllMembers, deleteMainEventFromAllMembers, deleteSupplementalEventsFromAllMembers } from './multiUserSyncService';
 import { prisma } from '../lib/prisma';
+import { getStartOfTodayInTimezone, DEFAULT_TIMEZONE } from '../utils/dateUtils';
 
 interface ParsedEvent {
   ics_uid: string;
@@ -113,9 +114,14 @@ export const syncCalendar = async (calendarId: string): Promise<{
   error?: string;
 }> => {
   try {
-    // Get calendar
+    // Get calendar with owner's timezone
     const calendar = await prisma.eventCalendar.findUnique({
       where: { id: calendarId },
+      include: {
+        owner: {
+          select: { timezone: true },
+        },
+      },
     });
 
     if (!calendar) {
@@ -138,8 +144,21 @@ export const syncCalendar = async (calendarId: string): Promise<{
       data: { sync_in_progress: true },
     });
 
+    // Get owner's timezone for filtering past events
+    const ownerTimezone = calendar.owner?.timezone || DEFAULT_TIMEZONE;
+    const todayStart = getStartOfTodayInTimezone(ownerTimezone);
+
     // Fetch and parse ICS feed
-    const parsedEvents = await fetchAndParseICS(calendar.ics_url);
+    const allParsedEvents = await fetchAndParseICS(calendar.ics_url);
+
+    // Filter to only events starting today or later (in owner's timezone)
+    // Past events are excluded to speed up calendar import and reduce clutter
+    const parsedEvents = allParsedEvents.filter(event => event.start_time >= todayStart);
+    const skippedPastEvents = allParsedEvents.length - parsedEvents.length;
+
+    if (skippedPastEvents > 0) {
+      console.log(`[icsSyncService] Skipped ${skippedPastEvents} past events for calendar ${calendarId} (cutoff: ${todayStart.toISOString()} in ${ownerTimezone})`);
+    }
 
     // Get existing events for this calendar
     const existingEvents = await prisma.event.findMany({
@@ -152,11 +171,13 @@ export const syncCalendar = async (calendarId: string): Promise<{
 
     let eventsAdded = 0;
     let eventsUpdated = 0;
-    const processedUids = new Set<string>();
 
-    // Process each parsed event
+    // Track all UIDs from the ICS feed (including past events) to prevent
+    // incorrect deletion of events that still exist but were filtered out
+    const allIcsUids = new Set<string>(allParsedEvents.map(e => e.ics_uid));
+
+    // Process each parsed event (only future events)
     for (const parsedEvent of parsedEvents) {
-      processedUids.add(parsedEvent.ics_uid);
       const existingEvent = existingEventMap.get(parsedEvent.ics_uid);
 
       if (existingEvent) {
@@ -197,8 +218,10 @@ export const syncCalendar = async (calendarId: string): Promise<{
     }
 
     // Delete events that no longer exist in the ICS feed
+    // Note: We check against allIcsUids (all events including past) to ensure
+    // we only delete events actually removed from the ICS source, not just filtered out
     const eventsToDelete = existingEvents.filter(
-      (e: any) => !processedUids.has(e.ics_uid)
+      (e: any) => !allIcsUids.has(e.ics_uid)
     );
 
     let eventsDeleted = 0;
