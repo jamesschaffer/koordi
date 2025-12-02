@@ -13,6 +13,7 @@ export interface EventCalendar {
   ics_url: string;
   color: string;
   sync_enabled: boolean;
+  sync_in_progress?: boolean; // True during ICS/Google Calendar sync
   last_sync_at?: string;
   last_sync_status?: string;
   child: Child;

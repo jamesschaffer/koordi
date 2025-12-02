@@ -198,6 +198,15 @@ export const assignEvent = async (
     throw new Error('Event not found or access denied');
   }
 
+  // Check if event is currently syncing - reject assignment to prevent race conditions
+  const currentEvent = await prisma.event.findUnique({
+    where: { id: eventId },
+    select: { sync_in_progress: true },
+  });
+  if (currentEvent?.sync_in_progress) {
+    throw new Error('Event is currently syncing to Google Calendar. Please wait and try again.');
+  }
+
   // Optimistic locking: Pre-check version if provided (fail fast)
   if (expectedVersion !== undefined && event.version !== expectedVersion) {
     throw new ConcurrentModificationError(
@@ -228,6 +237,7 @@ export const assignEvent = async (
   const newAssignedUserId = newIsSkipped ? null : assignToUserId;
 
   // Update assignment with optimistic locking (atomic check-and-set)
+  // Also set sync_in_progress to prevent reassignment during Google Calendar sync
   const updatedEvent = await prisma.event.update({
     where: {
       id: eventId,
@@ -236,6 +246,7 @@ export const assignEvent = async (
     data: {
       assigned_to_user_id: newAssignedUserId,
       is_skipped: newIsSkipped,
+      sync_in_progress: true, // Prevent reassignment during sync
       version: { increment: 1 }, // Atomic version increment
     },
     include: {
@@ -283,7 +294,29 @@ export const assignEvent = async (
     // Common reasons: user has no home address, event has no location, Maps API errors
   }
 
-  return updatedEvent;
+  // Clear sync_in_progress flag now that sync is complete
+  const finalEvent = await prisma.event.update({
+    where: { id: eventId },
+    data: { sync_in_progress: false },
+    include: {
+      event_calendar: {
+        include: {
+          child: true,
+        },
+      },
+      assigned_to: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          avatar_url: true,
+        },
+      },
+      supplemental_events: true,
+    },
+  });
+
+  return finalEvent;
 };
 
 /**

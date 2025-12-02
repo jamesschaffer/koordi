@@ -650,6 +650,8 @@ function Dashboard() {
                   <div className="w-full md:w-auto md:ml-4 flex flex-col gap-2 items-stretch md:items-end">
                     {(() => {
                       const isAssigning = pendingAssignmentEventId === event.id;
+                      const isSyncing = event.sync_in_progress === true;
+                      const isDisabled = isAssigning || isSyncing;
                       // Determine current value for the select
                       const currentValue = event.is_skipped
                         ? 'not-attending'
@@ -665,14 +667,19 @@ function Dashboard() {
                               handleAssign(event.id, value === 'unassigned' ? null : value, false);
                             }
                           }}
-                          disabled={isAssigning}
+                          disabled={isDisabled}
                         >
-                          <SelectTrigger className={`w-full md:w-64 h-auto min-h-[2.75rem] py-2 [&>span]:line-clamp-none ${event.is_skipped ? 'bg-gray-100 dark:bg-gray-800' : ''}`} disabled={isAssigning}>
+                          <SelectTrigger className={`w-full md:w-64 h-auto min-h-[2.75rem] py-2 [&>span]:line-clamp-none ${event.is_skipped ? 'bg-gray-100 dark:bg-gray-800' : ''}`} disabled={isDisabled}>
                             <SelectValue>
                               {isAssigning ? (
                                 <div className="flex items-center gap-2">
                                   <Loader2 className="w-4 h-4 animate-spin" />
                                   <span className="text-muted-foreground">Updating...</span>
+                                </div>
+                              ) : isSyncing ? (
+                                <div className="flex items-center gap-2">
+                                  <Loader2 className="w-4 h-4 animate-spin text-amber-500" />
+                                  <span className="text-amber-600">Syncing to Calendar...</span>
                                 </div>
                               ) : event.is_skipped ? (
                                 <div className="flex items-center gap-2">

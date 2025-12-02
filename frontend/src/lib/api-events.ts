@@ -22,6 +22,7 @@ export interface Event {
   is_all_day: boolean;
   is_skipped: boolean; // True if marked as "Not Attending"
   assigned_to_user_id?: string;
+  sync_in_progress?: boolean; // True during Google Calendar sync, disables reassignment
   version: number; // For optimistic locking
   keep_supplemental_events?: boolean; // User's preference for showing supplemental events on calendar
   event_calendar: {
