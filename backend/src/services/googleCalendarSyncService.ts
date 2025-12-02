@@ -91,14 +91,14 @@ export async function syncSupplementalEventToGoogleCalendar(
     };
 
     // Customize based on event type
-    if (supplementalEvent.type === 'buffer') {
-      // Buffer event (early arrival time)
-      const bufferMinutes = Math.round(
+    if (supplementalEvent.type === 'early_arrival' || supplementalEvent.type === 'buffer') {
+      // Early arrival event (waiting time before event starts)
+      const earlyMinutes = Math.round(
         (supplementalEvent.end_time.getTime() - supplementalEvent.start_time.getTime()) / 60000
       );
-      eventBody.description = `Early arrival buffer for: ${supplementalEvent.parent_event.title}\nChild: ${supplementalEvent.parent_event.event_calendar.child.name}\n\nBuffer time: ${bufferMinutes} minutes\nLocation: ${supplementalEvent.origin_address}`;
+      eventBody.description = `Early arrival for: ${supplementalEvent.parent_event.title}\nChild: ${supplementalEvent.parent_event.event_calendar.child.name}\n\nEarly arrival time: ${earlyMinutes} minutes\nLocation: ${supplementalEvent.origin_address}`;
       eventBody.location = supplementalEvent.origin_address;
-      eventBody.colorId = '5'; // Yellow color for buffer/waiting time
+      eventBody.colorId = '5'; // Yellow color for early arrival/waiting time
       eventBody.reminders = {
         useDefault: false,
         overrides: [],
@@ -369,7 +369,7 @@ export async function syncMultipleSupplementalEvents(
 export async function deleteSupplementalEventsForParent(
   parentEventId: string,
   userId?: string,
-  types?: Array<'departure' | 'buffer' | 'return'>
+  types?: Array<'departure' | 'early_arrival' | 'buffer' | 'return'>
 ): Promise<void> {
   const whereClause: any = { parent_event_id: parentEventId };
 

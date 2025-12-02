@@ -341,21 +341,21 @@ function Dashboard() {
 
           // Get supplemental events for both events
           const departure1 = event1.supplemental_events?.find(e => e.type === 'departure');
-          const buffer1 = event1.supplemental_events?.find(e => e.type === 'buffer');
+          const earlyArrival1 = event1.supplemental_events?.find(e => e.type === 'early_arrival' || e.type === 'buffer');
           const return1 = event1.supplemental_events?.find(e => e.type === 'return');
           const departure2 = event2.supplemental_events?.find(e => e.type === 'departure');
-          const buffer2 = event2.supplemental_events?.find(e => e.type === 'buffer');
+          const earlyArrival2 = event2.supplemental_events?.find(e => e.type === 'early_arrival' || e.type === 'buffer');
           const return2 = event2.supplemental_events?.find(e => e.type === 'return');
 
           // Calculate effective start time:
           // 1. Use departure supplemental event if it exists
-          // 2. Use buffer supplemental event if it exists
+          // 2. Use early arrival supplemental event if it exists
           // 3. For unassigned events with location, estimate drive time
           // 4. Otherwise use main event start time
           const start1 = departure1
             ? new Date(departure1.start_time).getTime()
-            : buffer1
-              ? new Date(buffer1.start_time).getTime()
+            : earlyArrival1
+              ? new Date(earlyArrival1.start_time).getTime()
               : !event1.assigned_to_user_id && event1.location
                 ? (() => {
                     const arrival1 = parseArrivalTime(event1.description, event1.start_time);
@@ -367,8 +367,8 @@ function Dashboard() {
 
           const start2 = departure2
             ? new Date(departure2.start_time).getTime()
-            : buffer2
-              ? new Date(buffer2.start_time).getTime()
+            : earlyArrival2
+              ? new Date(earlyArrival2.start_time).getTime()
               : !event2.assigned_to_user_id && event2.location
                 ? (() => {
                     const arrival2 = parseArrivalTime(event2.description, event2.start_time);
