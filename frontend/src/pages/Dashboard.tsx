@@ -584,15 +584,15 @@ function Dashboard() {
             return (
               <div key={event.id}>
                 <Card className={`hover:shadow-md transition-shadow ${hasConflict ? 'border-amber-300 border-2' : ''}`}>
-                  <CardContent className="pt-6">
+                  <CardContent className="pt-6 overflow-hidden">
                     <div className="flex flex-col md:flex-row items-start md:justify-between gap-4">
-                      <div className="flex-1 w-full">
+                      <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-3 mb-4">
                           <div
                             className="w-1 h-12 rounded-full shrink-0"
                             style={{ backgroundColor: event.is_skipped ? '#9ca3af' : event.event_calendar.color }}
                           />
-                          <div className="flex-1">
+                          <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 flex-wrap">
                               <CardTitle className={`text-lg ${event.is_skipped ? 'text-gray-500 line-through' : ''}`}>{event.title}</CardTitle>
                               {event.is_skipped && (
@@ -641,7 +641,7 @@ function Dashboard() {
 
                       {/* Description */}
                       {event.description && (
-                        <p className="text-sm text-muted-foreground mt-2 line-clamp-2 break-words">{event.description}</p>
+                        <p className="text-sm text-muted-foreground mt-2 line-clamp-2 break-all">{event.description}</p>
                       )}
                     </div>
                   </div>
