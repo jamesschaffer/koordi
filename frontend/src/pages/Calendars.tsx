@@ -136,6 +136,7 @@ function Calendars() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['calendars'] });
       queryClient.invalidateQueries({ queryKey: ['events'] });
+      queryClient.invalidateQueries({ queryKey: ['children'] });
       setIsCreating(false);
       resetDialog();
       toast.success('Calendar created successfully!');
