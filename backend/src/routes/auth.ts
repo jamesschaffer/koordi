@@ -41,13 +41,10 @@ const SCOPES = [
  * GET /api/auth/google
  * Initiates Google OAuth flow
  *
- * IMPORTANT: We always use prompt='consent' to ensure we receive a refresh token.
- * Without a refresh token, we cannot sync events to the user's Google Calendar.
- * Google only returns a refresh token on the first authorization OR when using prompt='consent'.
- *
- * The trade-off: Users will see the consent screen every time they log in, but this
- * guarantees the application will work correctly. Without this, returning users
- * would not have their events synced to Google Calendar.
+ * We use prompt='select_account' to let users choose their Google account without
+ * forcing the consent screen every time. For first-time users, Google will still
+ * show the consent screen and return a refresh token. For returning users who have
+ * already authorized, Google will skip consent and we'll use their stored refresh token.
  *
  * SECURITY: Uses state parameter to prevent CSRF attacks on OAuth flow.
  */
@@ -59,9 +56,9 @@ router.get('/google', (req: Request, res: Response) => {
   const authUrl = oauth2Client.generateAuthUrl({
     access_type: 'offline',
     scope: SCOPES,
-    // Always use 'consent' to ensure we get a refresh token
-    // This is critical for Google Calendar sync to work
-    prompt: 'consent',
+    // Use 'select_account' to let user pick account without forcing consent every time
+    // First-time users will still see consent; returning users skip it
+    prompt: 'select_account',
     state: state, // CSRF protection
   });
 
@@ -133,15 +130,8 @@ router.get('/google/callback', async (req: Request, res: Response) => {
     }
 
     // Create or update user
-    // Since we use prompt='consent', we should always receive a refresh token
+    // First-time users get a refresh token; returning users may not (they use stored token)
     const refreshToken: string | undefined = tokens.refresh_token || undefined;
-
-    if (!refreshToken) {
-      // This should never happen with prompt='consent', but handle it gracefully
-      console.error('No refresh token received from Google OAuth. This is unexpected with prompt=consent');
-      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-      return res.redirect(`${frontendUrl}/auth/error?message=Failed to get authorization. Please try again.`);
-    }
 
     const user = await findOrCreateUser(
       {
@@ -153,6 +143,15 @@ router.get('/google/callback', async (req: Request, res: Response) => {
       refreshToken,
       primaryCalendar.id,
     );
+
+    // Verify returning user has a stored refresh token if none was provided
+    if (!refreshToken && !user.google_refresh_token_enc) {
+      // Edge case: returning user with no stored token and none provided
+      // This shouldn't happen normally, but handle gracefully by prompting re-auth
+      console.error(`User ${user.email} has no refresh token stored and none was provided`);
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+      return res.redirect(`${frontendUrl}/auth/error?message=Please re-authorize to enable calendar sync.`);
+    }
 
     // Auto-accept any pending invitations for this email
     await autoAcceptPendingInvitations(user.id, user.email);
