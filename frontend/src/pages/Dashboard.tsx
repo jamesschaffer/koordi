@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getEvents, assignEvent, checkEventConflicts, resolveConflict } from '../lib/api-events';
@@ -25,6 +25,24 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 
+// Helper to get local date in YYYY-MM-DD format
+const getLocalDateString = (date: Date = new Date()): string => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+// Helper to validate a date string is complete (YYYY-MM-DD with reasonable year)
+const isValidDateString = (dateStr: string): boolean => {
+  if (!dateStr) return true; // Empty is valid (means no filter)
+  const match = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return false;
+  const year = parseInt(match[1], 10);
+  // Only accept years between 1900 and 2100
+  return year >= 1900 && year <= 2100;
+};
+
 function Dashboard() {
   const token = localStorage.getItem('auth_token') || '';
   const navigate = useNavigate();
@@ -32,8 +50,29 @@ function Dashboard() {
   const { toast } = useToast();
   const [filter, setFilter] = useState<'all' | 'unassigned' | 'mine' | 'skipped'>('all');
   const [selectedCalendar, setSelectedCalendar] = useState<string>('all');
-  const [startDate, setStartDate] = useState<string>(new Date().toISOString().split('T')[0]);
+
+  // Use local date for default, not UTC
+  const [startDate, setStartDate] = useState<string>(getLocalDateString());
   const [endDate, setEndDate] = useState<string>('');
+
+  // Debounced versions for query - only update when date is valid
+  const [debouncedStartDate, setDebouncedStartDate] = useState<string>(startDate);
+  const [debouncedEndDate, setDebouncedEndDate] = useState<string>(endDate);
+
+  // Debounce date changes to avoid querying with partial dates
+  useEffect(() => {
+    if (isValidDateString(startDate)) {
+      const timer = setTimeout(() => setDebouncedStartDate(startDate), 500);
+      return () => clearTimeout(timer);
+    }
+  }, [startDate]);
+
+  useEffect(() => {
+    if (isValidDateString(endDate)) {
+      const timer = setTimeout(() => setDebouncedEndDate(endDate), 500);
+      return () => clearTimeout(timer);
+    }
+  }, [endDate]);
   const [conflictDialog, setConflictDialog] = useState<{
     open: boolean;
     conflicts: Event[];
@@ -64,14 +103,14 @@ function Dashboard() {
   // Fetch events based on filters
   // For 'skipped' filter, we fetch all events and filter client-side
   const { data: events, isLoading } = useQuery({
-    queryKey: ['events', filter, selectedCalendar, startDate, endDate],
+    queryKey: ['events', filter, selectedCalendar, debouncedStartDate, debouncedEndDate],
     queryFn: () =>
       getEvents(token, {
         calendar_id: selectedCalendar === 'all' ? undefined : selectedCalendar,
         unassigned: filter === 'unassigned',
         assigned_to_me: filter === 'mine',
-        start_date: startDate || undefined,
-        end_date: endDate || undefined,
+        start_date: debouncedStartDate || undefined,
+        end_date: debouncedEndDate || undefined,
       }),
     // When skipped filter is active, we need all events to filter from
     enabled: filter !== 'skipped',
@@ -79,12 +118,12 @@ function Dashboard() {
 
   // Separate query for skipped filter - fetch all events
   const { data: allEvents, isLoading: isLoadingAll } = useQuery({
-    queryKey: ['events', 'all-for-skipped', selectedCalendar, startDate, endDate],
+    queryKey: ['events', 'all-for-skipped', selectedCalendar, debouncedStartDate, debouncedEndDate],
     queryFn: () =>
       getEvents(token, {
         calendar_id: selectedCalendar === 'all' ? undefined : selectedCalendar,
-        start_date: startDate || undefined,
-        end_date: endDate || undefined,
+        start_date: debouncedStartDate || undefined,
+        end_date: debouncedEndDate || undefined,
       }),
     enabled: filter === 'skipped',
   });
@@ -95,12 +134,12 @@ function Dashboard() {
 
   // Fetch unassigned count separately (for badge display, excludes past events)
   const { data: unassignedEvents } = useQuery({
-    queryKey: ['events', 'unassigned-count', startDate, endDate],
+    queryKey: ['events', 'unassigned-count', debouncedStartDate, debouncedEndDate],
     queryFn: () =>
       getEvents(token, {
         unassigned: true,
-        start_date: startDate || undefined,
-        end_date: endDate || undefined,
+        start_date: debouncedStartDate || undefined,
+        end_date: debouncedEndDate || undefined,
         exclude_past: true,
       }),
   });
@@ -486,7 +525,7 @@ function Dashboard() {
                   variant="ghost"
                   size="sm"
                   onClick={() => {
-                    setStartDate(new Date().toISOString().split('T')[0]);
+                    setStartDate(getLocalDateString());
                     setEndDate('');
                   }}
                 >
