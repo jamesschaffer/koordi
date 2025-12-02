@@ -132,6 +132,12 @@ export const syncCalendar = async (calendarId: string): Promise<{
       };
     }
 
+    // Set sync_in_progress flag to prevent deletion during sync
+    await prisma.eventCalendar.update({
+      where: { id: calendarId },
+      data: { sync_in_progress: true },
+    });
+
     // Fetch and parse ICS feed
     const parsedEvents = await fetchAndParseICS(calendar.ics_url);
 
@@ -219,7 +225,7 @@ export const syncCalendar = async (calendarId: string): Promise<{
       eventsDeleted++;
     }
 
-    // Update calendar sync status
+    // Update calendar sync status (keep sync_in_progress true until Google Calendar sync completes)
     await prisma.eventCalendar.update({
       where: { id: calendarId },
       data: {
@@ -232,6 +238,12 @@ export const syncCalendar = async (calendarId: string): Promise<{
     // Sync all events to Google Calendar for all calendar members
     await syncCalendarEventsToMembers(calendarId);
 
+    // Clear sync_in_progress flag AFTER Google Calendar sync completes
+    await prisma.eventCalendar.update({
+      where: { id: calendarId },
+      data: { sync_in_progress: false },
+    });
+
     return {
       success: true,
       eventsAdded,
@@ -239,10 +251,11 @@ export const syncCalendar = async (calendarId: string): Promise<{
       eventsDeleted,
     };
   } catch (error: any) {
-    // Update calendar with error status
+    // Update calendar with error status and clear sync_in_progress flag
     await prisma.eventCalendar.update({
       where: { id: calendarId },
       data: {
+        sync_in_progress: false,
         last_sync_at: new Date(),
         last_sync_status: 'error',
         last_sync_error: error.message,

@@ -76,6 +76,9 @@ function Calendars() {
   const [isCreating, setIsCreating] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
 
+  // Track which calendar is currently syncing (local state for immediate UI feedback)
+  const [syncingCalendarId, setSyncingCalendarId] = useState<string | null>(null);
+
   // ICS Validation state
   const [icsUrl, setIcsUrl] = useState('');
   const [icsValidation, setIcsValidation] = useState<ICSValidation | null>(null);
@@ -180,9 +183,18 @@ function Calendars() {
     },
     onError: (error: any) => {
       setIsDeleting(false);
-      toast.error('Failed to delete calendar', {
-        description: error.message || 'Please try again',
-      });
+      // Handle 409 Conflict (sync in progress) with specific message
+      if (error.response?.status === 409 && error.response?.data?.syncInProgress) {
+        toast.info('Calendar deletion disabled while syncing', {
+          description: 'Please wait for the sync to complete and try again.',
+        });
+        // Refresh calendars to get updated sync status
+        queryClient.invalidateQueries({ queryKey: ['calendars'] });
+      } else {
+        toast.error('Failed to delete calendar', {
+          description: error.message || 'Please try again',
+        });
+      }
     },
   });
 
@@ -197,14 +209,19 @@ function Calendars() {
   // Sync calendar mutation
   const syncCalendarMutation = useMutation({
     mutationFn: (calendarId: string) => syncCalendar(calendarId, token),
+    onMutate: (calendarId) => {
+      setSyncingCalendarId(calendarId);
+    },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['events'] });
       queryClient.invalidateQueries({ queryKey: ['calendars'] });
+      setSyncingCalendarId(null);
       toast.success('Calendar synced successfully!', {
         description: `${data.created} created, ${data.updated} updated, ${data.deleted} deleted`,
       });
     },
     onError: (error: any) => {
+      setSyncingCalendarId(null);
       // Handle 409 Conflict (sync already in progress) with specific message
       if (error.response?.status === 409) {
         toast.info('Sync already in progress', {
@@ -606,9 +623,10 @@ function Calendars() {
                       <DropdownMenuItem
                         onClick={() => handleDeleteCalendar(calendar.id)}
                         className="text-destructive focus:text-destructive"
+                        disabled={calendar.sync_in_progress || syncingCalendarId === calendar.id}
                       >
                         <Trash2 className="h-4 w-4 mr-2" />
-                        Delete
+                        {(calendar.sync_in_progress || syncingCalendarId === calendar.id) ? 'Delete (Syncing...)' : 'Delete'}
                       </DropdownMenuItem>
                       <DropdownMenuSeparator />
                       <DropdownMenuItem onClick={() => setMembersDialogCalendarId(calendar.id)}>
@@ -617,10 +635,10 @@ function Calendars() {
                       </DropdownMenuItem>
                       <DropdownMenuItem
                         onClick={() => syncCalendarMutation.mutate(calendar.id)}
-                        disabled={syncCalendarMutation.isPending}
+                        disabled={syncingCalendarId === calendar.id}
                       >
-                        <RefreshCw className={`h-4 w-4 mr-2 ${syncCalendarMutation.isPending ? 'animate-spin' : ''}`} />
-                        Sync Events
+                        <RefreshCw className={`h-4 w-4 mr-2 ${syncingCalendarId === calendar.id ? 'animate-spin' : ''}`} />
+                        {syncingCalendarId === calendar.id ? 'Syncing...' : 'Sync Events'}
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
@@ -657,31 +675,38 @@ function Calendars() {
                       </span>
                     </div>
                   )}
-                  {calendar.last_sync_at && (
+                  {(calendar.last_sync_at || calendar.sync_in_progress || syncingCalendarId === calendar.id) && (
                     <div className="pt-2 border-t">
                       <div className="flex items-center gap-2">
                         <div
                           className="w-2 h-2 rounded-full shrink-0"
                           style={{
-                            backgroundColor:
-                              calendar.last_sync_status === 'success'
-                                ? '#22c55e'
-                                : calendar.last_sync_status === 'error'
-                                ? '#ef4444'
-                                : '#22c55e'
+                            backgroundColor: (calendar.sync_in_progress || syncingCalendarId === calendar.id)
+                              ? '#f59e0b' // Yellow/amber when syncing
+                              : calendar.last_sync_status === 'success'
+                              ? '#22c55e'
+                              : calendar.last_sync_status === 'error'
+                              ? '#ef4444'
+                              : '#22c55e'
                           }}
                         />
                         <p className="text-xs text-muted-foreground">
-                          {calendar.last_sync_status === 'error' && (
-                            <span className="text-destructive mr-1">Error -</span>
+                          {(calendar.sync_in_progress || syncingCalendarId === calendar.id) ? (
+                            <span className="text-amber-600">Calendar deletion disabled while syncing</span>
+                          ) : (
+                            <>
+                              {calendar.last_sync_status === 'error' && (
+                                <span className="text-destructive mr-1">Error -</span>
+                              )}
+                              Last synced:{' '}
+                              {calendar.last_sync_at && new Date(calendar.last_sync_at).toLocaleString('en-US', {
+                                month: 'short',
+                                day: 'numeric',
+                                hour: 'numeric',
+                                minute: '2-digit',
+                              })}
+                            </>
                           )}
-                          Last synced:{' '}
-                          {new Date(calendar.last_sync_at).toLocaleString('en-US', {
-                            month: 'short',
-                            day: 'numeric',
-                            hour: 'numeric',
-                            minute: '2-digit',
-                          })}
                         </p>
                       </div>
                     </div>

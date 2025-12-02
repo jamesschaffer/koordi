@@ -176,8 +176,23 @@ router.delete('/:id', async (req: Request, res: Response) => {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    // Validate that only the owner remains before allowing deletion
     const { prisma } = await import('../lib/prisma');
+
+    // Check if calendar is currently syncing - reject deletion to prevent race conditions
+    const calendar = await prisma.eventCalendar.findUnique({
+      where: { id: req.params.id },
+      select: { sync_in_progress: true },
+    });
+
+    if (calendar?.sync_in_progress) {
+      return res.status(409).json({
+        error: 'Calendar deletion disabled',
+        details: 'Calendar is currently syncing. Please wait for sync to complete before deleting.',
+        syncInProgress: true,
+      });
+    }
+
+    // Validate that only the owner remains before allowing deletion
     const acceptedMemberCount = await prisma.eventCalendarMembership.count({
       where: {
         event_calendar_id: req.params.id,
