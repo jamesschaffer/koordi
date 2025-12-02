@@ -72,22 +72,54 @@ export function parseArrivalTime(
     // Map timezone strings to IANA timezone identifiers
     const timezone = mapTimezoneString(timezoneString);
 
-    // IMPORTANT: Extract the date in the EVENT'S LOCAL TIMEZONE, not UTC
-    // Example: 8:30 PM EST Dec 1 is stored as 2025-12-02T01:30:00Z (Dec 2 in UTC)
-    // If we used UTC date (Dec 2), we'd parse "Dec 2 8:00 PM" instead of "Dec 1 8:00 PM"
-    const year = eventStartTime.toLocaleString('en-US', { timeZone: timezone, year: 'numeric' });
-    const month = eventStartTime.toLocaleString('en-US', { timeZone: timezone, month: '2-digit' });
-    const day = eventStartTime.toLocaleString('en-US', { timeZone: timezone, day: '2-digit' });
-    const eventDateLocal = `${year}-${month}-${day}`;
+    // Parse the arrival time using a timezone-safe approach:
+    // 1. Get the event's local date and time components in the target timezone
+    // 2. Get the arrival time components (hours, minutes) from the parsed string
+    // 3. Calculate the difference directly in local time
 
-    const dateTimeString = `${eventDateLocal} ${timeString}`;
+    // Get event start time components in local timezone
+    const eventLocalTimeString = eventStartTime.toLocaleString('en-US', {
+      timeZone: timezone,
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    });
 
-    // Parse the time in the event's timezone
-    const parsedTime = parse(dateTimeString, 'yyyy-MM-dd h:mm a', new Date());
-    const zonedArrivalTime = toZonedTime(parsedTime, timezone);
+    // Parse arrival time string (e.g., "8:00 PM")
+    const arrivalMatch = timeString.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+    if (!arrivalMatch) {
+      console.warn(`Could not parse arrival time string: ${timeString}`);
+      const defaultArrivalTime = new Date(eventStartTime.getTime() - comfortBufferMinutes * 60000);
+      return {
+        arrivalTime: defaultArrivalTime,
+        bufferMinutes: comfortBufferMinutes,
+        comfortBufferMinutes,
+        source: 'default',
+      };
+    }
 
-    // Calculate the buffer from the parsed arrival time to event start (before adding comfort buffer)
-    const parsedBufferMinutes = differenceInMinutes(eventStartTime, zonedArrivalTime);
+    let arrivalHour = parseInt(arrivalMatch[1], 10);
+    const arrivalMinute = parseInt(arrivalMatch[2], 10);
+    const arrivalPeriod = arrivalMatch[3].toUpperCase();
+
+    // Convert to 24-hour format
+    if (arrivalPeriod === 'PM' && arrivalHour !== 12) {
+      arrivalHour += 12;
+    } else if (arrivalPeriod === 'AM' && arrivalHour === 12) {
+      arrivalHour = 0;
+    }
+
+    // Get event start time in 24-hour format in local timezone
+    const eventHour = parseInt(eventStartTime.toLocaleString('en-US', { timeZone: timezone, hour: 'numeric', hour12: false }), 10);
+    const eventMinute = parseInt(eventStartTime.toLocaleString('en-US', { timeZone: timezone, minute: '2-digit' }), 10);
+
+    // Calculate buffer in minutes (event time - arrival time)
+    // Both times are on the same day in local timezone
+    const eventMinutesFromMidnight = eventHour * 60 + eventMinute;
+    const arrivalMinutesFromMidnight = arrivalHour * 60 + arrivalMinute;
+    const parsedBufferMinutes = eventMinutesFromMidnight - arrivalMinutesFromMidnight;
+
+    console.log(`[parseArrivalTime] Event local time: ${eventHour}:${eventMinute.toString().padStart(2, '0')}, Arrival time: ${arrivalHour}:${arrivalMinute.toString().padStart(2, '0')}, Buffer: ${parsedBufferMinutes}min`);
 
     // Sanity check: parsed buffer should be positive and reasonable (0-120 minutes)
     if (parsedBufferMinutes < 0 || parsedBufferMinutes > 120) {
@@ -101,15 +133,19 @@ export function parseArrivalTime(
       };
     }
 
+    // Calculate arrival time by subtracting buffer from event start
+    // This is simpler than trying to construct a timezone-aware date
+    const arrivalTimeFromBuffer = new Date(eventStartTime.getTime() - parsedBufferMinutes * 60000);
+
     // Apply comfort buffer ON TOP of the parsed arrival time
     // If description says "Arrival Time: 1:30 PM" and comfort buffer is 5 min,
     // effective arrival time becomes 1:25 PM
-    const effectiveArrivalTime = new Date(zonedArrivalTime.getTime() - comfortBufferMinutes * 60000);
+    const effectiveArrivalTime = new Date(arrivalTimeFromBuffer.getTime() - comfortBufferMinutes * 60000);
 
     // Total buffer is parsed buffer + comfort buffer
     const totalBufferMinutes = parsedBufferMinutes + comfortBufferMinutes;
 
-    console.log(`Parsed arrival time: ${zonedArrivalTime.toISOString()}, adding ${comfortBufferMinutes}min comfort buffer, effective arrival: ${effectiveArrivalTime.toISOString()}`);
+    console.log(`Parsed arrival time: ${arrivalTimeFromBuffer.toISOString()}, adding ${comfortBufferMinutes}min comfort buffer, effective arrival: ${effectiveArrivalTime.toISOString()}`);
 
     return {
       arrivalTime: effectiveArrivalTime,
