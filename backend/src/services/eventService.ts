@@ -320,20 +320,19 @@ export const checkEventConflicts = async (
     // Import the arrival time parser
     const { parseArrivalTime } = await import('./arrivalTimeParser');
 
-    // Parse arrival time to get the buffer
-    const arrivalInfo = parseArrivalTime(
-      event.description,
-      event.start_time,
-      assignedUser.comfort_buffer_minutes
-    );
+    // Parse arrival time from description (if specified)
+    const arrivalInfo = parseArrivalTime(event.description, event.start_time);
 
-    // Estimate drive time (use a conservative estimate of 30 minutes for conflict checking)
+    // Determine target arrival time: either parsed arrival time or event start
+    const targetArrivalTime = arrivalInfo ? arrivalInfo.arrivalTime : event.start_time;
+
+    // Estimate drive time + comfort buffer (conservative estimate of 30 minutes for conflict checking)
     // In reality, supplemental events will calculate actual drive time with Google Maps
-    const estimatedDriveMinutes = 30;
+    const estimatedDriveMinutes = 30 + assignedUser.comfort_buffer_minutes;
 
-    // Effective start time: arrival time minus estimated drive time
+    // Effective start time: target arrival time minus estimated drive time (including buffer)
     effectiveStartTime = new Date(
-      arrivalInfo.arrivalTime.getTime() - estimatedDriveMinutes * 60000
+      targetArrivalTime.getTime() - estimatedDriveMinutes * 60000
     );
 
     // Effective end time: event end time plus estimated return drive time

@@ -3,7 +3,7 @@ import { apiClient } from './api';
 export interface SupplementalEvent {
   id: string;
   parent_event_id: string;
-  type: 'departure' | 'buffer' | 'return';
+  type: 'departure' | 'early_arrival' | 'buffer' | 'return'; // buffer is deprecated, use early_arrival
   title: string;
   start_time: string;
   end_time: string;
