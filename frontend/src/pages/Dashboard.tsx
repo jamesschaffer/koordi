@@ -596,7 +596,7 @@ function Dashboard() {
                             <div className="flex items-center gap-2 flex-wrap">
                               <CardTitle className={`text-lg ${event.is_skipped ? 'text-gray-500 line-through' : ''}`}>{event.title}</CardTitle>
                               {event.is_skipped && (
-                                <Badge variant="secondary" className="bg-gray-200 text-gray-600 dark:bg-gray-700 dark:text-gray-300">
+                                <Badge variant="secondary" className="bg-gray-200 text-gray-600">
                                   <Ban className="w-3 h-3 mr-1" />
                                   Not Attending
                                 </Badge>
@@ -669,7 +669,7 @@ function Dashboard() {
                           }}
                           disabled={isDisabled}
                         >
-                          <SelectTrigger className={`w-full md:w-64 h-auto min-h-[2.75rem] py-2 [&>span]:line-clamp-none ${event.is_skipped ? 'bg-gray-100 dark:bg-gray-800' : ''}`} disabled={isDisabled}>
+                          <SelectTrigger className={`w-full md:w-64 h-auto min-h-[2.75rem] py-2 [&>span]:line-clamp-none ${event.is_skipped ? 'bg-gray-100' : ''}`} disabled={isDisabled}>
                             <SelectValue>
                               {isAssigning ? (
                                 <div className="flex items-center gap-2">
