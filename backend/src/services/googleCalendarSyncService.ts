@@ -105,10 +105,16 @@ export async function syncSupplementalEventToGoogleCalendar(
       };
     } else {
       // Drive time events (departure/return)
-      eventBody.description = `Drive time for: ${supplementalEvent.parent_event.title}\nChild: ${supplementalEvent.parent_event.event_calendar.child.name}\n\nOrigin: ${supplementalEvent.origin_address}\nDestination: ${supplementalEvent.destination_address}\nEstimated drive time: ${supplementalEvent.drive_time_minutes} minutes`;
+      // Build Google Maps directions URL for clickable navigation
+      const originEncoded = encodeURIComponent(supplementalEvent.origin_address);
+      const destinationEncoded = encodeURIComponent(supplementalEvent.destination_address);
+      const directionsUrl = `https://www.google.com/maps/dir/?api=1&origin=${originEncoded}&destination=${destinationEncoded}&travelmode=driving`;
+
+      eventBody.description = `Drive time for: ${supplementalEvent.parent_event.title}\nChild: ${supplementalEvent.parent_event.event_calendar.child.name}\n\nOrigin: ${supplementalEvent.origin_address}\nDestination: ${supplementalEvent.destination_address}\nEstimated drive time: ${supplementalEvent.drive_time_minutes} minutes\n\n📍 Directions: ${directionsUrl}`;
+      // Set location to destination (for departure) or origin (for return) so Google Calendar shows a valid, clickable location
       eventBody.location = supplementalEvent.type === 'departure'
-        ? `From: ${supplementalEvent.origin_address} → ${supplementalEvent.destination_address}`
-        : `From: ${supplementalEvent.origin_address} → ${supplementalEvent.destination_address}`;
+        ? supplementalEvent.destination_address
+        : supplementalEvent.origin_address;
       eventBody.colorId = '8'; // Gray color for drive time events
       eventBody.reminders = {
         useDefault: false,
