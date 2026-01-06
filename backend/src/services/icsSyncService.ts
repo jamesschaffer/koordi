@@ -248,24 +248,25 @@ export const syncCalendar = async (calendarId: string): Promise<{
       eventsDeleted++;
     }
 
-    // Update calendar sync status (keep sync_in_progress true until Google Calendar sync completes)
+    // Update calendar sync status
     await prisma.eventCalendar.update({
       where: { id: calendarId },
       data: {
         last_sync_at: new Date(),
         last_sync_status: 'success',
         last_sync_error: null,
+        sync_in_progress: false,
       },
     });
 
-    // Sync all events to Google Calendar for all calendar members
-    await syncCalendarEventsToMembers(calendarId);
-
-    // Clear sync_in_progress flag AFTER Google Calendar sync completes
-    await prisma.eventCalendar.update({
-      where: { id: calendarId },
-      data: { sync_in_progress: false },
-    });
+    // Only sync to Google Calendar if there were actual changes
+    // This dramatically speeds up sync when ICS feed hasn't changed
+    if (eventsAdded > 0 || eventsUpdated > 0 || eventsDeleted > 0) {
+      console.log(`[icsSyncService] Changes detected (+${eventsAdded} ~${eventsUpdated} -${eventsDeleted}), syncing to Google Calendar...`);
+      await syncCalendarEventsToMembers(calendarId);
+    } else {
+      console.log(`[icsSyncService] No changes detected, skipping Google Calendar sync`);
+    }
 
     return {
       success: true,
