@@ -91,8 +91,13 @@ function Dashboard() {
     currentState: ConcurrentModificationError['details']['current_state'];
   } | null>(null);
 
-  // Track which event is currently being assigned (for loading state)
-  const [pendingAssignmentEventId, setPendingAssignmentEventId] = useState<string | null>(null);
+  // Track pending assignment with both eventId and the selected value
+  // This eliminates the UI glitch where old name briefly shows before new name
+  const [pendingAssignment, setPendingAssignment] = useState<{
+    eventId: string;
+    userId: string | null;
+    skip: boolean;
+  } | null>(null);
 
   // Fetch calendars for filter dropdown
   const { data: calendars } = useQuery({
@@ -165,7 +170,7 @@ function Dashboard() {
     }) =>
       assignEvent(eventId, userId, expectedVersion, token, skip),
     onSuccess: () => {
-      setPendingAssignmentEventId(null);
+      setPendingAssignment(null);
       queryClient.invalidateQueries({ queryKey: ['events'] });
       toast({
         title: 'Success',
@@ -173,7 +178,7 @@ function Dashboard() {
       });
     },
     onError: (error: any) => {
-      setPendingAssignmentEventId(null);
+      setPendingAssignment(null);
       // Handle concurrent modification (HTTP 409)
       if (error.response?.status === 409 && error.response?.data?.code === 'CONCURRENT_MODIFICATION') {
         const conflictData = error.response.data as ConcurrentModificationError;
@@ -235,8 +240,9 @@ function Dashboard() {
       return;
     }
 
-    // Set loading state immediately
-    setPendingAssignmentEventId(eventId);
+    // Set loading state immediately with the selected value
+    // This prevents the UI glitch where old name briefly shows
+    setPendingAssignment({ eventId, userId, skip: !!skip });
 
     // If marking as "Not Attending", no conflict check needed
     if (skip) {
@@ -249,7 +255,7 @@ function Dashboard() {
         const { hasConflicts, conflicts } = await checkEventConflicts(eventId, userId, token);
         if (hasConflicts) {
           // Clear loading state since we're showing a dialog
-          setPendingAssignmentEventId(null);
+          setPendingAssignment(null);
           // Find assignee name
           const assignee = allMembers?.find((m) => m.id === userId);
 
@@ -259,7 +265,7 @@ function Dashboard() {
             conflicts,
             assigneeName: assignee?.name || assignee?.email,
             onConfirm: () => {
-              setPendingAssignmentEventId(eventId);
+              setPendingAssignment({ eventId, userId, skip: false });
               assignMutation.mutate({ eventId, userId, expectedVersion: event.version, skip: false });
             },
           });
@@ -267,7 +273,7 @@ function Dashboard() {
         }
       } catch (error) {
         console.error('Failed to check conflicts:', error);
-        setPendingAssignmentEventId(null);
+        setPendingAssignment(null);
         return;
       }
     }
@@ -649,13 +655,17 @@ function Dashboard() {
                   {/* Assignment Controls */}
                   <div className="w-full md:w-auto md:ml-4 flex flex-col gap-2 items-stretch md:items-end">
                     {(() => {
-                      const isAssigning = pendingAssignmentEventId === event.id;
+                      const isAssigningThisEvent = pendingAssignment?.eventId === event.id;
                       const isSyncing = event.sync_in_progress === true;
-                      const isDisabled = isAssigning || isSyncing;
+                      const isDisabled = isAssigningThisEvent || isSyncing;
+
                       // Determine current value for the select
-                      const currentValue = event.is_skipped
-                        ? 'not-attending'
-                        : event.assigned_to_user_id || 'unassigned';
+                      // Use pending value if this event has a pending assignment (eliminates UI glitch)
+                      const currentValue = isAssigningThisEvent
+                        ? (pendingAssignment.skip ? 'not-attending' : pendingAssignment.userId || 'unassigned')
+                        : event.is_skipped
+                          ? 'not-attending'
+                          : event.assigned_to_user_id || 'unassigned';
 
                       return (
                         <Select
@@ -669,9 +679,9 @@ function Dashboard() {
                           }}
                           disabled={isDisabled}
                         >
-                          <SelectTrigger className={`w-full md:w-64 h-auto min-h-[2.75rem] py-2 [&>span]:line-clamp-none ${event.is_skipped ? 'bg-gray-100' : ''}`} disabled={isDisabled}>
+                          <SelectTrigger className={`w-full md:w-64 h-auto min-h-[2.75rem] py-2 [&>span]:line-clamp-none ${event.is_skipped && !isAssigningThisEvent ? 'bg-gray-100' : ''}`} disabled={isDisabled}>
                             <SelectValue>
-                              {isAssigning ? (
+                              {isAssigningThisEvent ? (
                                 <div className="flex items-center gap-2">
                                   <Loader2 className="w-4 h-4 animate-spin" />
                                   <span className="text-muted-foreground">Updating...</span>
