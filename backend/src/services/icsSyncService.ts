@@ -296,7 +296,7 @@ export const syncCalendar = async (calendarId: string): Promise<{
 };
 
 /**
- * Sync all enabled calendars
+ * Sync all enabled calendars (system-wide, used for scheduled jobs)
  */
 export const syncAllCalendars = async (): Promise<{
   totalCalendars: number;
@@ -328,6 +328,73 @@ export const syncAllCalendars = async (): Promise<{
       error: result.error,
     });
   }
+
+  return {
+    totalCalendars: calendars.length,
+    successCount,
+    errorCount,
+    results,
+  };
+};
+
+/**
+ * Sync all calendars that a user has access to (owned or member of)
+ * Used for on-login/on-demand sync
+ */
+export const syncUserCalendars = async (userId: string): Promise<{
+  totalCalendars: number;
+  successCount: number;
+  errorCount: number;
+  results: Array<{ calendarId: string; calendarName: string; success: boolean; error?: string }>;
+}> => {
+  // Get all calendars the user owns or is a member of
+  const calendars = await prisma.eventCalendar.findMany({
+    where: {
+      sync_enabled: true,
+      OR: [
+        { owner_id: userId },
+        {
+          members: {
+            some: {
+              user_id: userId,
+              status: 'accepted',
+            },
+          },
+        },
+      ],
+    },
+    select: {
+      id: true,
+      name: true,
+    },
+  });
+
+  let successCount = 0;
+  let errorCount = 0;
+  const results: Array<{ calendarId: string; calendarName: string; success: boolean; error?: string }> = [];
+
+  console.log(`[syncUserCalendars] Syncing ${calendars.length} calendars for user ${userId}`);
+
+  for (const calendar of calendars) {
+    const result = await syncCalendar(calendar.id);
+
+    if (result.success) {
+      successCount++;
+      console.log(`[syncUserCalendars] ✅ Synced "${calendar.name}": +${result.eventsAdded} -${result.eventsDeleted} ~${result.eventsUpdated}`);
+    } else {
+      errorCount++;
+      console.log(`[syncUserCalendars] ❌ Failed to sync "${calendar.name}": ${result.error}`);
+    }
+
+    results.push({
+      calendarId: calendar.id,
+      calendarName: calendar.name,
+      success: result.success,
+      error: result.error,
+    });
+  }
+
+  console.log(`[syncUserCalendars] Completed: ${successCount}/${calendars.length} successful`);
 
   return {
     totalCalendars: calendars.length,

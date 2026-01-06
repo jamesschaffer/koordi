@@ -206,3 +206,22 @@ export const getFamilyMembers = (token: string) =>
   apiClient.get(`/family-members`, {
     headers: { Authorization: `Bearer ${token}` },
   });
+
+// Sync all user calendars (called on app load)
+export interface SyncAllResult {
+  message: string;
+  totalCalendars: number;
+  successCount: number;
+  errorCount: number;
+  results: Array<{
+    calendarId: string;
+    calendarName: string;
+    success: boolean;
+    error?: string;
+  }>;
+}
+
+export const syncAllCalendars = (token: string) =>
+  apiClient.post<SyncAllResult>('/calendars/sync-all', {}, {
+    headers: { Authorization: `Bearer ${token}` },
+  });

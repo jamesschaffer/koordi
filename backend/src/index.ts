@@ -13,7 +13,6 @@ import childRoutes from './routes/child';
 import eventRoutes from './routes/event';
 import jobRoutes from './routes/jobs';
 import invitationRoutes from './routes/invitations';
-import './workers/icsSync.worker'; // Initialize worker
 import { initializeScheduler } from './jobs/scheduler';
 import { initializeSocketServer } from './config/socket';
 
@@ -41,7 +40,6 @@ app.get('/api/health', async (req, res) => {
     'DATABASE_URL',
     'JWT_SECRET',
     'ENCRYPTION_KEY',
-    'REDIS_URL',
   ];
 
   const emailEnvVars = ['SMTP_HOST', 'SMTP_USER', 'SMTP_PASS', 'EMAIL_FROM'];

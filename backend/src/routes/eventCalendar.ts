@@ -3,6 +3,7 @@ import { authenticateToken } from '../middleware/auth';
 import * as eventCalendarService from '../services/eventCalendarService';
 import * as icsService from '../services/icsService';
 import * as icsSyncService from '../services/icsSyncService';
+import { syncUserCalendars } from '../services/icsSyncService';
 
 const router = express.Router();
 
@@ -236,6 +237,37 @@ router.post('/validate-ics', async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error('Validate ICS error:', error);
     res.status(500).json({ error: 'Failed to validate ICS feed' });
+  }
+});
+
+/**
+ * POST /api/calendars/sync-all
+ * Sync all calendars the user has access to (owned or member of)
+ * Called on app load/login to refresh all calendar data
+ */
+router.post('/sync-all', async (req: Request, res: Response) => {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    console.log(`[POST /calendars/sync-all] Starting sync for user ${userId}`);
+
+    const result = await syncUserCalendars(userId);
+
+    console.log(`[POST /calendars/sync-all] Completed: ${result.successCount}/${result.totalCalendars} calendars synced`);
+
+    return res.json({
+      message: 'Sync completed',
+      totalCalendars: result.totalCalendars,
+      successCount: result.successCount,
+      errorCount: result.errorCount,
+      results: result.results,
+    });
+  } catch (error: any) {
+    console.error(`[POST /calendars/sync-all] Error:`, error);
+    return res.status(500).json({ error: error.message || 'Failed to sync calendars' });
   }
 });
 

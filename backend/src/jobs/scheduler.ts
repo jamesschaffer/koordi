@@ -1,39 +1,13 @@
 import cron from 'node-cron';
-import { icsSyncQueue } from '../config/queue';
 import { cleanupExpiredInvitations } from '../services/invitationService';
 
 /**
- * Initialize periodic calendar sync jobs
+ * Initialize scheduled jobs
+ *
+ * Note: Calendar syncing is now triggered on-demand when users open the app,
+ * rather than running on a fixed schedule. This eliminates the need for Redis.
  */
 export const initializeScheduler = () => {
-  // Schedule calendar sync every 5 minutes
-  // Cron pattern: */5 * * * * = every 5 minutes
-  cron.schedule('*/5 * * * *', async () => {
-    console.log('⏰ Scheduled sync triggered at', new Date().toISOString());
-
-    try {
-      // Add sync-all job to queue
-      await icsSyncQueue.add(
-        { type: 'all' },
-        {
-          attempts: 3, // Retry up to 3 times on failure
-          backoff: {
-            type: 'exponential',
-            delay: 60000, // Start with 1 minute delay
-          },
-          removeOnComplete: 100, // Keep last 100 completed jobs
-          removeOnFail: 200, // Keep last 200 failed jobs
-        }
-      );
-
-      console.log('✅ Sync job added to queue');
-    } catch (error) {
-      console.error('❌ Failed to add sync job to queue:', error);
-    }
-  });
-
-  console.log('📅 Scheduler initialized: Calendar sync every 5 minutes');
-
   // Schedule cleanup of expired invitations daily at 2 AM
   // Cron pattern: 0 2 * * * = every day at 2:00 AM
   cron.schedule('0 2 * * *', async () => {
@@ -46,59 +20,6 @@ export const initializeScheduler = () => {
     }
   });
 
-  console.log('🧹 Scheduler initialized: Expired invitations cleanup daily at 2 AM');
-
-  // Also add an immediate sync job on startup
-  icsSyncQueue.add(
-    { type: 'all' },
-    {
-      attempts: 3,
-      backoff: {
-        type: 'exponential',
-        delay: 60000,
-      },
-      removeOnComplete: 100,
-      removeOnFail: 200,
-    }
-  ).then(() => {
-    console.log('🚀 Initial sync job added to queue');
-  }).catch((error) => {
-    console.error('❌ Failed to add initial sync job:', error);
-  });
-};
-
-/**
- * Manually trigger a sync for a specific calendar
- */
-export const triggerCalendarSync = async (calendarId: string) => {
-  return icsSyncQueue.add(
-    { type: 'single', calendarId },
-    {
-      attempts: 3,
-      backoff: {
-        type: 'exponential',
-        delay: 60000,
-      },
-      removeOnComplete: 100,
-      removeOnFail: 200,
-    }
-  );
-};
-
-/**
- * Manually trigger a sync for all calendars
- */
-export const triggerAllCalendarsSync = async () => {
-  return icsSyncQueue.add(
-    { type: 'all' },
-    {
-      attempts: 3,
-      backoff: {
-        type: 'exponential',
-        delay: 60000,
-      },
-      removeOnComplete: 100,
-      removeOnFail: 200,
-    }
-  );
+  console.log('📅 Scheduler initialized: Expired invitations cleanup daily at 2 AM');
+  console.log('📱 Calendar sync: Triggered on app load (no background sync)');
 };
