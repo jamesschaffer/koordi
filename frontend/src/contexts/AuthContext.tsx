@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { apiClient } from '../lib/api';
 import { syncAllCalendars } from '../lib/api-calendars';
+import { toast } from 'sonner';
 
 interface User {
   id: string;
@@ -37,13 +38,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     hasSyncedRef.current = true;
 
     setSyncing(true);
+    const toastId = toast.loading('Syncing calendars...');
     try {
       console.log('[Auth] Starting background calendar sync...');
       const result = await syncAllCalendars(authToken);
       console.log(`[Auth] Calendar sync complete: ${result.successCount}/${result.totalCalendars} calendars synced`);
+
+      if (result.totalCalendars === 0) {
+        toast.dismiss(toastId);
+      } else {
+        toast.success('Calendars synced', {
+          id: toastId,
+          description: `${result.successCount} of ${result.totalCalendars} calendars updated`,
+        });
+      }
     } catch (error) {
       // Don't fail login if sync fails - just log it
       console.error('[Auth] Background sync failed:', error);
+      toast.error('Calendar sync failed', {
+        id: toastId,
+        description: 'Your calendars may not be up to date',
+      });
     } finally {
       setSyncing(false);
     }
