@@ -160,7 +160,7 @@ function Dashboard() {
     return eventsData;
   }, [eventsData, filter]);
 
-  // Assignment mutation with optimistic locking
+  // Assignment mutation with optimistic updates
   const assignMutation = useMutation({
     mutationFn: ({ eventId, userId, expectedVersion, skip }: {
       eventId: string;
@@ -169,16 +169,57 @@ function Dashboard() {
       skip?: boolean;
     }) =>
       assignEvent(eventId, userId, expectedVersion, token, skip),
+    onMutate: async ({ eventId, userId, skip }) => {
+      // Cancel any outgoing refetches so they don't overwrite our optimistic update
+      await queryClient.cancelQueries({ queryKey: ['events'] });
+
+      // Snapshot the previous value for rollback
+      const previousEvents = queryClient.getQueriesData({ queryKey: ['events'] });
+
+      // Find the member info for the new assignee
+      const assignee = userId ? allMembers?.find((m) => m.id === userId) : null;
+
+      // Optimistically update the cache
+      queryClient.setQueriesData({ queryKey: ['events'] }, (old: Event[] | undefined) => {
+        if (!old) return old;
+        return old.map((event) => {
+          if (event.id === eventId) {
+            return {
+              ...event,
+              assigned_to_user_id: skip ? null : userId,
+              assigned_to: skip ? null : assignee ? {
+                id: assignee.id,
+                name: assignee.name,
+                email: assignee.email,
+                avatar_url: assignee.avatar_url,
+              } : null,
+              is_skipped: !!skip,
+              version: event.version + 1,
+            };
+          }
+          return event;
+        });
+      });
+
+      return { previousEvents };
+    },
     onSuccess: () => {
       setPendingAssignment(null);
+      // Refetch to get server-confirmed data (supplemental events, etc.)
       queryClient.invalidateQueries({ queryKey: ['events'] });
       toast({
         title: 'Success',
         description: 'Event assignment updated',
       });
     },
-    onError: (error: any) => {
+    onError: (error: any, _variables, context) => {
       setPendingAssignment(null);
+      // Rollback to previous state on error
+      if (context?.previousEvents) {
+        context.previousEvents.forEach(([queryKey, data]) => {
+          queryClient.setQueryData(queryKey, data);
+        });
+      }
       // Handle concurrent modification (HTTP 409)
       if (error.response?.status === 409 && error.response?.data?.code === 'CONCURRENT_MODIFICATION') {
         const conflictData = error.response.data as ConcurrentModificationError;
