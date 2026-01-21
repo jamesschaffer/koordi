@@ -181,9 +181,18 @@ export const syncCalendar = async (calendarId: string): Promise<{
       const existingEvent = existingEventMap.get(parsedEvent.ics_uid);
 
       if (existingEvent) {
-        // Check if event needs updating (compare last_modified)
-        const existingLastModified = new Date(existingEvent.last_modified);
-        if (parsedEvent.last_modified > existingLastModified) {
+        // Check if event needs updating by comparing actual event data
+        // We don't rely solely on last_modified because many ICS providers
+        // (including TeamSnap) don't update LASTMODIFIED when event times change
+        const hasChanges =
+          existingEvent.title !== parsedEvent.title ||
+          existingEvent.description !== (parsedEvent.description || null) ||
+          existingEvent.location !== (parsedEvent.location || null) ||
+          existingEvent.start_time.getTime() !== parsedEvent.start_time.getTime() ||
+          existingEvent.end_time.getTime() !== parsedEvent.end_time.getTime() ||
+          existingEvent.is_all_day !== parsedEvent.is_all_day;
+
+        if (hasChanges) {
           await prisma.event.update({
             where: { id: existingEvent.id },
             data: {
