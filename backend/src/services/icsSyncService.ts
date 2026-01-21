@@ -20,11 +20,18 @@ interface ParsedEvent {
  */
 export const fetchAndParseICS = async (icsUrl: string): Promise<ParsedEvent[]> => {
   try {
+    // Add cache-busting parameter to bypass CDN caching (e.g., TeamSnap's ical-cdn)
+    // This forces a fresh fetch instead of getting stale cached data
+    const cacheBustUrl = new URL(icsUrl);
+    cacheBustUrl.searchParams.set('_nocache', Date.now().toString());
+
     // Fetch ICS data
-    const response = await axios.get(icsUrl, {
+    const response = await axios.get(cacheBustUrl.toString(), {
       timeout: 30000,
       headers: {
         'User-Agent': 'Koordi/1.0',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
       },
     });
 
