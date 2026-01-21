@@ -184,13 +184,30 @@ export const syncCalendar = async (calendarId: string): Promise<{
         // Check if event needs updating by comparing actual event data
         // We don't rely solely on last_modified because many ICS providers
         // (including TeamSnap) don't update LASTMODIFIED when event times change
-        const hasChanges =
-          existingEvent.title !== parsedEvent.title ||
-          existingEvent.description !== (parsedEvent.description || null) ||
-          existingEvent.location !== (parsedEvent.location || null) ||
-          existingEvent.start_time.getTime() !== parsedEvent.start_time.getTime() ||
-          existingEvent.end_time.getTime() !== parsedEvent.end_time.getTime() ||
-          existingEvent.is_all_day !== parsedEvent.is_all_day;
+        const dbStartTime = new Date(existingEvent.start_time).getTime();
+        const dbEndTime = new Date(existingEvent.end_time).getTime();
+        const icsStartTime = parsedEvent.start_time.getTime();
+        const icsEndTime = parsedEvent.end_time.getTime();
+
+        const titleChanged = existingEvent.title !== parsedEvent.title;
+        const descChanged = (existingEvent.description || null) !== (parsedEvent.description || null);
+        const locChanged = (existingEvent.location || null) !== (parsedEvent.location || null);
+        const startChanged = dbStartTime !== icsStartTime;
+        const endChanged = dbEndTime !== icsEndTime;
+        const allDayChanged = existingEvent.is_all_day !== parsedEvent.is_all_day;
+
+        const hasChanges = titleChanged || descChanged || locChanged || startChanged || endChanged || allDayChanged;
+
+        // Debug logging for time comparisons
+        if (parsedEvent.title.toLowerCase().includes('practice')) {
+          console.log(`[icsSyncService] DEBUG: Comparing "${parsedEvent.title}"`);
+          console.log(`  DB start:  ${existingEvent.start_time} (${dbStartTime})`);
+          console.log(`  ICS start: ${parsedEvent.start_time} (${icsStartTime})`);
+          console.log(`  DB end:    ${existingEvent.end_time} (${dbEndTime})`);
+          console.log(`  ICS end:   ${parsedEvent.end_time} (${icsEndTime})`);
+          console.log(`  Changes: title=${titleChanged}, desc=${descChanged}, loc=${locChanged}, start=${startChanged}, end=${endChanged}, allDay=${allDayChanged}`);
+          console.log(`  hasChanges=${hasChanges}`);
+        }
 
         if (hasChanges) {
           await prisma.event.update({
