@@ -23,6 +23,7 @@ LIVE_VARS=$(echo "$LIVE_CONFIG" | \
   sort)
 
 # Expected variables (update this list when you add new config)
+# Note: REDIS_URL was removed when we switched from Bull Queue to on-load sync
 EXPECTED_VARS="DATABASE_URL
 EMAIL_FROM
 ENCRYPTION_KEY
@@ -33,7 +34,6 @@ GOOGLE_MAPS_API_KEY
 GOOGLE_REDIRECT_URI
 JWT_SECRET
 NODE_ENV
-REDIS_URL
 SMTP_HOST
 SMTP_PASS
 SMTP_PORT
