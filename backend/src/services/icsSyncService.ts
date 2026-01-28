@@ -12,7 +12,51 @@ interface ParsedEvent {
   start_time: Date;
   end_time: Date;
   is_all_day: boolean;
+  is_cancelled: boolean;
   last_modified: Date;
+}
+
+/**
+ * Detect if an event is cancelled and clean the title/description
+ * Checks both standard iCalendar STATUS:CANCELLED and TeamSnap-style [CANCELED] prefix
+ */
+function detectCancellation(event: any): {
+  isCancelled: boolean;
+  cleanTitle: string;
+  cleanDescription: string | undefined;
+} {
+  const summary = event.summary || '';
+  const description = event.description || undefined;
+
+  // Check STATUS property (standard iCalendar)
+  const status = event.status;
+  if (status && status.toString().toLowerCase() === 'cancelled') {
+    return {
+      isCancelled: true,
+      cleanTitle: summary || 'Untitled Event',
+      cleanDescription: description,
+    };
+  }
+
+  // Check for [CANCELED] or [CANCELLED] prefix (TeamSnap-style)
+  const cancelledPattern = /^\[CANCELL?ED\]\s*/i;
+
+  if (cancelledPattern.test(summary)) {
+    const cleanTitle = summary.replace(cancelledPattern, '').trim() || 'Untitled Event';
+    const cleanDescription = description?.replace(cancelledPattern, '').trim() || undefined;
+
+    return {
+      isCancelled: true,
+      cleanTitle,
+      cleanDescription,
+    };
+  }
+
+  return {
+    isCancelled: false,
+    cleanTitle: summary || 'Untitled Event',
+    cleanDescription: description,
+  };
 }
 
 /**
@@ -44,9 +88,12 @@ export const fetchAndParseICS = async (icsUrl: string): Promise<ParsedEvent[]> =
 
       // Extract event data
       const icsUid = event.uid || '';
-      const title = event.summary || 'Untitled Event';
-      const description = event.description || undefined;
       const location = event.location || undefined;
+
+      // Detect cancellation and clean title/description
+      const cancellation = detectCancellation(event);
+      const title = cancellation.cleanTitle;
+      const description = cancellation.cleanDescription;
 
       // Handle start/end times
       let startTime: Date;
@@ -100,6 +147,7 @@ export const fetchAndParseICS = async (icsUrl: string): Promise<ParsedEvent[]> =
         start_time: startTime,
         end_time: endTime,
         is_all_day: isAllDay,
+        is_cancelled: cancellation.isCancelled,
         last_modified: lastModified,
       });
     }
@@ -202,8 +250,9 @@ export const syncCalendar = async (calendarId: string): Promise<{
         const startChanged = dbStartTime !== icsStartTime;
         const endChanged = dbEndTime !== icsEndTime;
         const allDayChanged = existingEvent.is_all_day !== parsedEvent.is_all_day;
+        const cancelledChanged = existingEvent.is_cancelled !== parsedEvent.is_cancelled;
 
-        const hasChanges = titleChanged || descChanged || locChanged || startChanged || endChanged || allDayChanged;
+        const hasChanges = titleChanged || descChanged || locChanged || startChanged || endChanged || allDayChanged || cancelledChanged;
 
         // Debug logging for time comparisons
         if (parsedEvent.title.toLowerCase().includes('practice')) {
@@ -217,6 +266,9 @@ export const syncCalendar = async (calendarId: string): Promise<{
         }
 
         if (hasChanges) {
+          // Check if event just became cancelled
+          const justBecameCancelled = !existingEvent.is_cancelled && parsedEvent.is_cancelled;
+
           await prisma.event.update({
             where: { id: existingEvent.id },
             data: {
@@ -226,10 +278,31 @@ export const syncCalendar = async (calendarId: string): Promise<{
               start_time: parsedEvent.start_time,
               end_time: parsedEvent.end_time,
               is_all_day: parsedEvent.is_all_day,
+              is_cancelled: parsedEvent.is_cancelled,
+              // Unassign if event just became cancelled
+              ...(justBecameCancelled ? { assigned_to_user_id: null } : {}),
               last_modified: parsedEvent.last_modified,
             },
           });
           eventsUpdated++;
+
+          // If event just became cancelled, delete from all users' Google Calendars
+          if (justBecameCancelled) {
+            console.log(`[icsSyncService] Event "${parsedEvent.title}" was cancelled - removing from Google Calendars`);
+            try {
+              await deleteSupplementalEventsFromAllMembers(existingEvent.id);
+              await deleteMainEventFromAllMembers(existingEvent.id);
+            } catch (gcError: any) {
+              console.error(`[icsSyncService] Failed to delete cancelled event from Google Calendar:`, gcError.message);
+            }
+          }
+
+          // If event was un-cancelled, re-sync to Google Calendar for all members
+          const justBecameUncancelled = existingEvent.is_cancelled && !parsedEvent.is_cancelled;
+          if (justBecameUncancelled) {
+            console.log(`[icsSyncService] Event "${parsedEvent.title}" was un-cancelled - will re-sync to Google Calendars`);
+            // The event will be synced at the end via syncCalendarEventsToMembers
+          }
         }
       } else {
         // Create new event
@@ -243,6 +316,7 @@ export const syncCalendar = async (calendarId: string): Promise<{
             start_time: parsedEvent.start_time,
             end_time: parsedEvent.end_time,
             is_all_day: parsedEvent.is_all_day,
+            is_cancelled: parsedEvent.is_cancelled,
             last_modified: parsedEvent.last_modified,
           },
         });

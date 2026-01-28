@@ -2,6 +2,8 @@ import ICAL from 'ical.js';
 import dns from 'dns/promises';
 import { URL } from 'url';
 import { prisma } from '../lib/prisma';
+import { deleteMainEventFromGoogleCalendar } from './mainEventGoogleCalendarSync';
+import { deleteSupplementalEventsForParent } from './googleCalendarSyncService';
 
 /**
  * SSRF Protection: Validate that a URL is safe to fetch
@@ -139,6 +141,53 @@ export interface ParsedEvent {
   start_time: Date;
   end_time: Date;
   is_all_day: boolean;
+  is_cancelled: boolean;
+}
+
+/**
+ * Detect if an event is cancelled
+ * Checks both standard iCalendar STATUS:CANCELLED and TeamSnap-style [CANCELED] prefix
+ * Returns cleaned title/description with the prefix removed
+ */
+function detectCancellation(vevent: ICAL.Component): {
+  isCancelled: boolean;
+  cleanTitle: string;
+  cleanDescription: string | undefined;
+} {
+  const event = new ICAL.Event(vevent);
+  const summary = event.summary || '';
+  const description = event.description ? String(event.description) : undefined;
+
+  // Check STATUS property (standard iCalendar)
+  const status = vevent.getFirstPropertyValue('status');
+  if (status && status.toString().toLowerCase() === 'cancelled') {
+    return {
+      isCancelled: true,
+      cleanTitle: summary || 'Untitled Event',
+      cleanDescription: description,
+    };
+  }
+
+  // Check for [CANCELED] or [CANCELLED] prefix (TeamSnap-style)
+  // Pattern matches: [CANCELED], [CANCELLED], with optional trailing space
+  const cancelledPattern = /^\[CANCELL?ED\]\s*/i;
+
+  if (cancelledPattern.test(summary)) {
+    const cleanTitle = summary.replace(cancelledPattern, '').trim() || 'Untitled Event';
+    const cleanDescription = description?.replace(cancelledPattern, '').trim() || undefined;
+
+    return {
+      isCancelled: true,
+      cleanTitle,
+      cleanDescription,
+    };
+  }
+
+  return {
+    isCancelled: false,
+    cleanTitle: summary || 'Untitled Event',
+    cleanDescription: description,
+  };
 }
 
 /**
@@ -260,15 +309,17 @@ export const parseICSEvents = (icsData: string): ParsedEvent[] => {
 
   return vevents.map((vevent) => {
     const event = new ICAL.Event(vevent);
+    const cancellation = detectCancellation(vevent);
 
     return {
       ics_uid: event.uid,
-      title: event.summary || 'Untitled Event',
-      description: event.description ? String(event.description) : undefined,
+      title: cancellation.cleanTitle,
+      description: cancellation.cleanDescription,
       location: event.location ? String(event.location) : undefined,
       start_time: event.startDate.toJSDate(),
       end_time: event.endDate.toJSDate(),
       is_all_day: event.startDate.isDate, // All-day events don't have time component
+      is_cancelled: cancellation.isCancelled,
     };
   });
 };
@@ -318,6 +369,9 @@ export const syncEventCalendar = async (calendarId: string): Promise<{
         const existing = existingEventsByUID.get(parsedEvent.ics_uid);
 
         if (existing) {
+          // Check if event just became cancelled (was not cancelled, now is cancelled)
+          const justBecameCancelled = !existing.is_cancelled && parsedEvent.is_cancelled;
+
           // Update existing event
           await prisma.event.update({
             where: { id: existing.id },
@@ -328,10 +382,48 @@ export const syncEventCalendar = async (calendarId: string): Promise<{
               start_time: parsedEvent.start_time,
               end_time: parsedEvent.end_time,
               is_all_day: parsedEvent.is_all_day,
+              is_cancelled: parsedEvent.is_cancelled,
               last_modified: new Date(),
             },
           });
           updated++;
+
+          // If event just became cancelled, unassign and delete from all users' Google Calendars
+          if (justBecameCancelled) {
+            console.log(`Event ${existing.id} (${parsedEvent.title}) was cancelled - unassigning and removing from Google Calendars`);
+
+            // Unassign the event (clear assignment)
+            await prisma.event.update({
+              where: { id: existing.id },
+              data: {
+                assigned_to_user_id: null,
+              },
+            });
+
+            // Find all users who have this event synced
+            const syncRecords = await prisma.userGoogleEventSync.findMany({
+              where: {
+                event_id: existing.id,
+                sync_type: 'main',
+              },
+            });
+
+            // Delete main event from each user's Google Calendar
+            for (const syncRecord of syncRecords) {
+              try {
+                await deleteMainEventFromGoogleCalendar(existing.id, syncRecord.user_id);
+                // Clean up the sync record after successful deletion
+                await prisma.userGoogleEventSync.delete({
+                  where: { id: syncRecord.id },
+                });
+              } catch (error) {
+                console.error(`Failed to delete cancelled event from user ${syncRecord.user_id}'s Google Calendar:`, error);
+              }
+            }
+
+            // Delete supplemental events (drive times) from all users
+            await deleteSupplementalEventsForParent(existing.id);
+          }
         } else {
           // Create new event
           await prisma.event.create({
@@ -344,6 +436,7 @@ export const syncEventCalendar = async (calendarId: string): Promise<{
               start_time: parsedEvent.start_time,
               end_time: parsedEvent.end_time,
               is_all_day: parsedEvent.is_all_day,
+              is_cancelled: parsedEvent.is_cancelled,
             },
           });
           created++;

@@ -59,6 +59,12 @@ export async function syncMainEventToGoogleCalendar(
       }
     }
 
+    // Skip syncing cancelled events to Google Calendar
+    if (event.is_cancelled) {
+      console.log(`[syncMainEventToGoogleCalendar] Skipping sync for cancelled event ${eventId}`);
+      return null;
+    }
+
     if (!user) {
       // Fetch user data if not provided in context (backward compatibility)
       user = await prisma.user.findUnique({

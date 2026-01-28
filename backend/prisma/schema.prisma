@@ -149,6 +149,7 @@ model Event {
   end_time              DateTime  @db.Timestamptz(6)
   is_all_day            Boolean   @default(false)
   is_skipped            Boolean   @default(false) // True if marked as "Not Attending"
+  is_cancelled          Boolean   @default(false) // Detected from ICS STATUS or [CANCELED] prefix
   assigned_to_user_id   String?   @db.Uuid
   sync_in_progress      Boolean   @default(false) // True during Google Calendar sync, disables reassignment
   version               Int       @default(1) // Optimistic locking: increments on each assignment change

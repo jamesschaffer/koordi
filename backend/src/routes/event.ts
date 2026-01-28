@@ -23,6 +23,7 @@ router.use(authenticateToken);
  * - unassigned: Only show unassigned events
  * - assigned_to_me: Only show events assigned to me
  * - exclude_past: Exclude events that have already ended (end_time < now)
+ * - include_cancelled: Include cancelled events (default: false)
  */
 router.get('/', async (req: Request, res: Response) => {
   try {
@@ -70,6 +71,10 @@ router.get('/', async (req: Request, res: Response) => {
 
     if (req.query.exclude_past === 'true') {
       filters.excludePast = true;
+    }
+
+    if (req.query.include_cancelled === 'true') {
+      filters.includeCancelled = true;
     }
 
     console.log(`[GET /api/events] Filters:`, JSON.stringify(filters));

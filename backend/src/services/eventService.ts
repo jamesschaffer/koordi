@@ -14,6 +14,7 @@ export const getUserEvents = async (userId: string, filters?: {
   unassignedOnly?: boolean;
   assignedToMe?: boolean;
   excludePast?: boolean;
+  includeCancelled?: boolean;
 }) => {
   // Get user's keep_supplemental_events setting
   const user = await prisma.user.findUnique({
@@ -60,6 +61,12 @@ export const getUserEvents = async (userId: string, filters?: {
   // Exclude events that have already ended (end_time < now)
   if (filters?.excludePast) {
     where.end_time = { gte: new Date() };
+  }
+
+  // Note: Cancelled events are included by default so users can see the cancellation indicator
+  // The includeCancelled filter can be used to explicitly exclude them if needed
+  if (filters?.includeCancelled === false) {
+    where.is_cancelled = false;
   }
 
   const events = await prisma.event.findMany({
@@ -375,12 +382,13 @@ export const checkEventConflicts = async (
   }
 
   // Find all main events assigned to the target user that overlap with the effective time window
-  // Exclude skipped events from conflict detection
+  // Exclude skipped and cancelled events from conflict detection
   const eventConflicts = await prisma.event.findMany({
     where: {
       id: { not: eventId }, // Exclude the event itself
       assigned_to_user_id: assignToUserId,
       is_skipped: false, // Exclude "Not Attending" events
+      is_cancelled: false, // Exclude cancelled events
       OR: [
         // Event starts during this window
         {
@@ -419,12 +427,13 @@ export const checkEventConflicts = async (
 
   // Find all supplemental events (drive times) for other events assigned to this user
   // that overlap with the effective time window
-  // Exclude supplemental events from skipped parent events
+  // Exclude supplemental events from skipped or cancelled parent events
   const supplementalConflicts = await prisma.supplementalEvent.findMany({
     where: {
       parent_event: {
         assigned_to_user_id: assignToUserId,
         is_skipped: false, // Exclude "Not Attending" events
+        is_cancelled: false, // Exclude cancelled events
       },
       OR: [
         // Supplemental event starts during this window

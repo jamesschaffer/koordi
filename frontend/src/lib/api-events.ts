@@ -21,6 +21,7 @@ export interface Event {
   end_time: string;
   is_all_day: boolean;
   is_skipped: boolean; // True if marked as "Not Attending"
+  is_cancelled: boolean; // True if event was cancelled (from ICS feed)
   assigned_to_user_id?: string;
   sync_in_progress?: boolean; // True during Google Calendar sync, disables reassignment
   version: number; // For optimistic locking

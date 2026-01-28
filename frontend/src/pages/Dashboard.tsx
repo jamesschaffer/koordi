@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { Calendar, MapPin, User, AlertTriangle, Loader2, Ban } from 'lucide-react';
+import { Calendar, MapPin, User, AlertTriangle, Loader2, Ban, XCircle } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Input } from '@/components/ui/input';
@@ -360,10 +360,10 @@ function Dashboard() {
   const eventsWithConflicts = useMemo(() => {
     if (!eventsData || eventsData.length === 0) return {};
 
-    // Group events by assignee, excluding skipped events
+    // Group events by assignee, excluding skipped and cancelled events
     const eventsByAssignee = eventsData.reduce((acc, event) => {
-      // Skip events marked as "Not Attending"
-      if (event.is_skipped) return acc;
+      // Skip events marked as "Not Attending" or cancelled
+      if (event.is_skipped || event.is_cancelled) return acc;
 
       if (event.assigned_to_user_id) {
         if (!acc[event.assigned_to_user_id]) {
@@ -637,12 +637,18 @@ function Dashboard() {
                         <div className="flex items-center gap-3 mb-4">
                           <div
                             className="w-1 h-12 rounded-full shrink-0"
-                            style={{ backgroundColor: event.is_skipped ? '#9ca3af' : event.event_calendar.color }}
+                            style={{ backgroundColor: event.is_cancelled || event.is_skipped ? '#9ca3af' : event.event_calendar.color }}
                           />
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 flex-wrap">
-                              <CardTitle className={`text-lg ${event.is_skipped ? 'text-gray-500 line-through' : ''}`}>{event.title}</CardTitle>
-                              {event.is_skipped && (
+                              <CardTitle className={`text-lg ${event.is_cancelled || event.is_skipped ? 'text-gray-500 line-through' : ''}`}>{event.title}</CardTitle>
+                              {event.is_cancelled && (
+                                <Badge variant="secondary" className="bg-gray-200 text-gray-600">
+                                  <XCircle className="w-3 h-3 mr-1" />
+                                  Cancelled
+                                </Badge>
+                              )}
+                              {event.is_skipped && !event.is_cancelled && (
                                 <Badge variant="secondary" className="bg-gray-200 text-gray-600">
                                   <Ban className="w-3 h-3 mr-1" />
                                   Not Attending
@@ -653,7 +659,7 @@ function Dashboard() {
                                   All Day
                                 </Badge>
                               )}
-                              {hasConflict && !event.is_skipped && (
+                              {hasConflict && !event.is_skipped && !event.is_cancelled && (
                                 <Badge variant="destructive" className="bg-amber-600">
                                   <AlertTriangle className="w-3 h-3 mr-1" />
                                   Conflict
@@ -698,7 +704,8 @@ function Dashboard() {
                     {(() => {
                       const isAssigningThisEvent = pendingAssignment?.eventId === event.id;
                       const isSyncing = event.sync_in_progress === true;
-                      const isDisabled = isAssigningThisEvent || isSyncing;
+                      const isCancelled = event.is_cancelled === true;
+                      const isDisabled = isAssigningThisEvent || isSyncing || isCancelled;
 
                       // Determine current value for the select
                       // Use pending value if this event has a pending assignment (eliminates UI glitch)
@@ -720,7 +727,7 @@ function Dashboard() {
                           }}
                           disabled={isDisabled}
                         >
-                          <SelectTrigger className={`w-full md:w-64 h-auto min-h-[2.75rem] py-2 [&>span]:line-clamp-none ${event.is_skipped && !isAssigningThisEvent ? 'bg-gray-100' : ''}`} disabled={isDisabled}>
+                          <SelectTrigger className={`w-full md:w-64 h-auto min-h-[2.75rem] py-2 [&>span]:line-clamp-none ${(event.is_skipped || event.is_cancelled) && !isAssigningThisEvent ? 'bg-gray-100' : ''}`} disabled={isDisabled}>
                             <SelectValue>
                               {isAssigningThisEvent ? (
                                 <div className="flex items-center gap-2">
@@ -731,6 +738,13 @@ function Dashboard() {
                                 <div className="flex items-center gap-2">
                                   <Loader2 className="w-4 h-4 animate-spin text-amber-500" />
                                   <span className="text-amber-600">Syncing to Calendar...</span>
+                                </div>
+                              ) : isCancelled ? (
+                                <div className="flex items-center gap-2">
+                                  <div className="w-6 h-6 rounded-full bg-gray-200 flex items-center justify-center shrink-0">
+                                    <XCircle className="w-3 h-3 text-gray-500" />
+                                  </div>
+                                  <span className="text-gray-500">Cancelled</span>
                                 </div>
                               ) : event.is_skipped ? (
                                 <div className="flex items-center gap-2">
