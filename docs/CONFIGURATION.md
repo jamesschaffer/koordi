@@ -106,18 +106,26 @@ NODE_ENV=development
 **Format:** `postgresql://USER:PASSWORD@HOST:PORT/DATABASE?params`
 
 ```env
-# Development
+# Development (local PostgreSQL)
 DATABASE_URL="postgresql://koordi_user:dev_password_123@localhost:5432/koordi_dev?schema=public"
 
-# Production (with connection pooling)
-DATABASE_URL="postgresql://user:pass@prod-db.aws.com:5432/koordi?schema=public&connection_limit=10&pool_timeout=30&sslmode=require"
+# Production (Neon serverless PostgreSQL)
+DATABASE_URL="postgresql://neondb_owner:<password>@ep-royal-brook-adx8hxis-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require"
 ```
 
 **Parameters:**
 - `schema=public` - PostgreSQL schema (default: public)
 - `connection_limit=N` - Max connections per process (default: unlimited, recommend 10)
 - `pool_timeout=N` - Connection acquisition timeout in seconds (default: 10)
-- `sslmode=require` - Enforce SSL/TLS (production only)
+- `sslmode=require` - Enforce SSL/TLS (required for Neon and production)
+
+**Production Database: Neon**
+
+Koordi uses [Neon](https://neon.tech) for the production database:
+- **Provider:** Neon (serverless PostgreSQL)
+- **Region:** us-east-1
+- **Connection:** Uses pooler endpoint for application connections
+- **Migrations:** Use the same pooler endpoint (Neon handles this well)
 
 **Setup:** See [DATABASE_SETUP.md](./DATABASE_SETUP.md)
 
@@ -493,7 +501,10 @@ SENTRY_DSN="<staging-sentry-dsn>"
 ```env
 NODE_ENV=production
 PORT=3000
-DATABASE_URL="<from-secrets-manager>"
+
+# Database: Neon (serverless PostgreSQL)
+DATABASE_URL="postgresql://neondb_owner:<password>@ep-royal-brook-adx8hxis-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require"
+
 FRONTEND_URL=https://app.koordie.com
 
 JWT_SECRET="<from-secrets-manager>"
@@ -520,7 +531,8 @@ TRUST_PROXY=true  # Behind load balancer
 ```
 
 **Production Security:**
-- All secrets stored in AWS Secrets Manager / Google Secret Manager
+- All secrets stored in Google Secret Manager (via Cloud Run)
+- Database hosted on Neon (serverless PostgreSQL, us-east-1)
 - Environment variables injected at runtime
 - Secrets rotated every 90 days
 - Separate credentials for each environment

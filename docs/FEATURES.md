@@ -633,6 +633,43 @@ This document provides a comprehensive breakdown of core features in Koordi. Eac
 
 ---
 
+### Feature 2.7b: Cancelled Event Detection and Display
+
+**User Action:**
+- (Automatic - detected during ICS sync)
+
+**Business Logic:**
+1. During ICS sync, detect cancelled events via:
+   - Standard iCalendar `STATUS:CANCELLED` property
+   - TeamSnap-style `[CANCELED]` or `[CANCELLED]` prefix in event title
+2. When event is detected as cancelled:
+   - Set `is_cancelled = true` in database
+   - Strip `[CANCELED]` prefix from title for clean display
+   - Set `assigned_to_user_id = null` (unassign event)
+   - Delete all supplemental events (drive times) from database
+   - Remove event from all users' Google Calendars
+3. When event is un-cancelled (status changes back):
+   - Set `is_cancelled = false`
+   - Event becomes assignable again
+   - Will sync back to Google Calendar when assigned
+4. Broadcast WebSocket event: "event_updated"
+
+**Frontend Display:**
+- Cancelled events show grey "Cancelled" badge (same styling as "Not Attending")
+- Assignment dropdown is disabled for cancelled events
+- Cancelled events excluded from conflict detection
+
+**Edge Cases:**
+- Event cancelled while assigned: Assignment cleared, supplemental events deleted
+- Event un-cancelled: Available for re-assignment
+- Both `[CANCELED]` and `[CANCELLED]` spellings supported (TeamSnap uses American spelling)
+
+**Background Jobs:**
+- ICS Sync Job detects cancellation status
+- Google Calendar Sync Job removes cancelled events from all members' calendars
+
+---
+
 ### Feature 2.8: Calculate Departure and Return Times
 
 **User Action:**

@@ -80,6 +80,7 @@ END:VCALENDAR
 | `LOCATION` | Event location | No | `Lincoln Field, San Francisco` |
 | `LAST-MODIFIED` | Last modification time | No | `20240301T120000Z` |
 | `RRULE` | Recurrence rule | No | `FREQ=WEEKLY;COUNT=10` |
+| `STATUS` | Event status | No | `CONFIRMED`, `TENTATIVE`, `CANCELLED` |
 
 *Either DTEND or DURATION must be present, not both.
 
@@ -555,6 +556,89 @@ If recurring event expansion is needed in the future:
 
 ---
 
+## CANCELLED EVENT DETECTION
+
+### Overview
+
+The ICS sync service detects cancelled events through two methods:
+
+1. **Standard iCalendar STATUS Property:** The `STATUS:CANCELLED` property per RFC 5545
+2. **TeamSnap-Style Title Prefix:** The `[CANCELED]` or `[CANCELLED]` prefix in the event title
+
+### Detection Logic
+
+```typescript
+// In icsSyncService.ts
+
+// Method 1: Check STATUS property
+const status = event.status?.toLowerCase();
+const isCancelledByStatus = status === 'cancelled';
+
+// Method 2: Check for TeamSnap-style prefix in title
+const cancelledPrefixRegex = /^\[CANCELL?ED\]\s*/i;
+const hasCancelledPrefix = cancelledPrefixRegex.test(event.summary || '');
+
+// Event is cancelled if either method detects it
+const isCancelled = isCancelledByStatus || hasCancelledPrefix;
+
+// Strip the prefix from title for clean display
+const cleanTitle = hasCancelledPrefix
+  ? (event.summary || '').replace(cancelledPrefixRegex, '')
+  : event.summary || 'Untitled Event';
+```
+
+### Behavior When Event Is Cancelled
+
+1. **Database Updates:**
+   - Set `is_cancelled = true` on the Event record
+   - Set `assigned_to_user_id = null` (unassign the event)
+   - Store the clean title (without `[CANCELED]` prefix)
+
+2. **Supplemental Events:**
+   - Delete all supplemental events (drive times) associated with this event
+
+3. **Google Calendar Sync:**
+   - Remove the event from all users' Google Calendars
+   - Delete via `UserGoogleEventSync` tracking records
+
+4. **Frontend Display:**
+   - Show grey "Cancelled" badge on the event
+   - Disable assignment dropdown
+   - Exclude from conflict detection
+
+### Behavior When Event Is Un-Cancelled
+
+If an event was previously cancelled and the ICS feed now shows it as active:
+
+1. Set `is_cancelled = false`
+2. Event becomes available for assignment
+3. Event will sync to Google Calendar when assigned
+
+### Example ICS Events
+
+**Standard Cancelled Event:**
+```
+BEGIN:VEVENT
+UID:event-123@teamsnap.com
+DTSTART:20240320T160000Z
+DTEND:20240320T173000Z
+SUMMARY:Soccer Practice
+STATUS:CANCELLED
+END:VEVENT
+```
+
+**TeamSnap-Style Cancelled Event:**
+```
+BEGIN:VEVENT
+UID:event-456@teamsnap.com
+DTSTART:20240325T100000Z
+DTEND:20240325T120000Z
+SUMMARY:[CANCELED] Soccer Game vs Eagles
+END:VEVENT
+```
+
+---
+
 ## DESCRIPTION FIELD PARSING
 
 ### Use Case
@@ -927,6 +1011,15 @@ fs.writeFileSync('tests/fixtures/sample.ics', sampleIcs);
 - [x] Skip events without valid start time
 - [ ] Private/local IP rejection (not implemented)
 - [ ] Field length validation (not implemented)
+
+### Cancelled Event Detection
+- [x] Standard iCalendar `STATUS:CANCELLED` property detection
+- [x] TeamSnap-style `[CANCELED]` / `[CANCELLED]` prefix detection
+- [x] Clean title extraction (strip cancelled prefix)
+- [x] Automatic unassignment of cancelled events
+- [x] Supplemental event deletion on cancellation
+- [x] Google Calendar removal on cancellation
+- [x] Un-cancellation support (re-enable events)
 
 ### Sync Features
 - [x] Sync enabled/disabled flag per calendar

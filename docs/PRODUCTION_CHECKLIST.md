@@ -1,7 +1,7 @@
 # Production Deployment Checklist
 **Purpose:** Step-by-step checklist for deploying Koordi to production
-**Last Updated:** 2025-11-23
-**Status:** Pre-deployment preparation
+**Last Updated:** 2025-01-28
+**Status:** Production (using Neon database)
 
 ---
 
@@ -48,16 +48,17 @@
 ### Infrastructure Setup
 
 - [ ] **Environment Provisioning**
-  - [ ] Production PostgreSQL database provisioned
-  - [ ] Production Redis instance provisioned
+  - [ ] Production PostgreSQL database provisioned (Neon - serverless)
+  - [ ] Production Redis instance provisioned (Google Memory Store)
   - [ ] Domain name registered and configured
   - [ ] SSL certificates obtained
   - [ ] CDN configured for static assets (optional)
 
-- [ ] **Hosting Platform** (Choose one: AWS, Heroku, Render, Railway, etc.)
-  - [ ] Backend hosting account created
-  - [ ] Frontend hosting account created (Vercel, Netlify, etc.)
-  - [ ] Deployment pipelines configured
+- [ ] **Hosting Platform** (Google Cloud Run + Neon)
+  - [ ] Google Cloud project created with billing enabled
+  - [ ] Neon database created (us-east-1 region)
+  - [ ] Cloud Run services deployed (frontend + backend)
+  - [ ] Deployment pipelines configured (GitHub Actions)
   - [ ] Auto-scaling rules configured
   - [ ] Health check endpoints configured
 
@@ -65,8 +66,8 @@
 
 - [ ] **Backend Environment Variables** (.env.production)
   ```bash
-  # Database
-  DATABASE_URL=postgresql://user:pass@host:5432/koordi_production?schema=public&connection_limit=20
+  # Database (Neon - serverless PostgreSQL)
+  DATABASE_URL=postgresql://neondb_owner:<password>@ep-royal-brook-adx8hxis-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require
 
   # Server
   PORT=3000
@@ -349,6 +350,6 @@
 - Document any deviations from the checklist
 - Keep a deployment log in a separate document
 
-**Checklist Version:** 1.0
-**Last Review:** 2025-11-23
-**Next Review:** Before first production deployment
+**Checklist Version:** 1.1
+**Last Review:** 2025-01-28
+**Changes:** Updated for Neon database (migrated from Cloud SQL)

@@ -467,32 +467,53 @@ npx prisma migrate dev
 
 ## PRODUCTION SETUP
 
-### Recommended PostgreSQL Configuration
+### Production Database: Neon (Serverless PostgreSQL)
+
+Koordi uses [Neon](https://neon.tech) for the production database. Neon is a serverless PostgreSQL platform that provides:
+
+- **Serverless scaling:** Scales to zero when inactive, scales up automatically
+- **Built-in connection pooling:** Via the pooler endpoint
+- **Automatic backups:** Point-in-time recovery included
+- **Branching:** Database branching for development/testing
+- **Region:** us-east-1 (AWS)
+
+### Connection String Format
+
+```env
+# Pooler endpoint (recommended for application connections and migrations)
+DATABASE_URL="postgresql://neondb_owner:<password>@ep-royal-brook-adx8hxis-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require"
+```
+
+**Key Parameters:**
+- Use the `-pooler` endpoint for application connections
+- `sslmode=require` - Required for Neon connections
+- No need for `connection_limit` - Neon handles pooling automatically
+
+### Why Neon Instead of Cloud SQL
+
+| Feature | Neon | Cloud SQL |
+|---------|------|-----------|
+| Pricing | Pay per usage, generous free tier | Fixed monthly cost |
+| Scaling | Serverless (scales to zero) | Manual scaling |
+| Connection Pooling | Built-in | Requires separate setup |
+| Cold Start | Fast (~500ms) | N/A (always running) |
+| Backups | Automatic, point-in-time | Requires configuration |
+
+### Alternative: Self-Hosted PostgreSQL
+
+For local development, use a local PostgreSQL instance:
 
 **Minimal Setup (1-10k users):**
 - **Instance:** 2 vCPU, 4GB RAM
 - **Storage:** 50GB SSD
 - **Connections:** 100 max connections
-- **Example:** AWS RDS db.t3.medium, Google Cloud SQL db-custom-2-4096
 
 **Medium Setup (10k-100k users):**
 - **Instance:** 4 vCPU, 16GB RAM
 - **Storage:** 200GB SSD
 - **Connections:** 200 max connections
-- **Example:** AWS RDS db.r6g.xlarge, Azure Database for PostgreSQL
 
-### Environment Variables (Production)
-
-```env
-DATABASE_URL="postgresql://user:password@production-host.aws.com:5432/koordi?schema=public&connection_limit=10&pool_timeout=30&sslmode=require"
-```
-
-**Key Parameters:**
-- `connection_limit=10` - Limits connections per instance (adjust based on your app server count)
-- `pool_timeout=30` - 30 seconds timeout for connection acquisition
-- `sslmode=require` - Enforces SSL/TLS encryption
-
-### Migration Deployment (Production)
+### Migration Deployment (Production - Neon)
 
 **CI/CD Pipeline Example (GitHub Actions):**
 
@@ -505,30 +526,41 @@ DATABASE_URL="postgresql://user:password@production-host.aws.com:5432/koordi?sch
     DATABASE_URL: ${{ secrets.DATABASE_URL }}
 ```
 
-**Manual Deployment:**
+**Manual Deployment with Neon:**
 
 ```bash
-# 1. Backup database first (see below)
+# 1. Set production DATABASE_URL (Neon pooler endpoint)
+export DATABASE_URL="postgresql://neondb_owner:<password>@ep-royal-brook-adx8hxis-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require"
 
-# 2. Set production DATABASE_URL
-export DATABASE_URL="postgresql://..."
-
-# 3. Deploy migrations (no prompts)
+# 2. Deploy migrations (no prompts)
 npx prisma migrate deploy
 
-# 4. Verify migration status
+# 3. Verify migration status
 npx prisma migrate status
 ```
 
-### Connection Pooling (Prisma Accelerate or PgBouncer)
+**Note:** With Neon, you can use the same pooler endpoint for both application connections and migrations. No separate proxy or direct endpoint is required.
 
-**Option 1: Prisma Accelerate (Recommended)**
+### Connection Pooling
+
+**Production (Neon - Built-in Pooling):**
+
+Neon provides built-in connection pooling via its pooler endpoint. Use the endpoint with `-pooler` in the hostname:
+
+```env
+# Neon pooler endpoint (recommended)
+DATABASE_URL="postgresql://neondb_owner:<password>@ep-royal-brook-adx8hxis-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require"
+```
+
+No additional pooling setup is required.
+
+**Alternative: Prisma Accelerate**
 ```env
 # Prisma-managed connection pooling + global cache
 DATABASE_URL="prisma://accelerate.prisma-data.net/?api_key=your_key"
 ```
 
-**Option 2: PgBouncer (Self-hosted)**
+**Alternative: PgBouncer (Self-hosted)**
 ```bash
 # Install PgBouncer
 sudo apt install pgbouncer
@@ -897,11 +929,11 @@ postgresql://[user[:password]@][host][:port][/dbname][?param1=value1&...]
 - [ ] Prisma Studio tested (`npx prisma studio`)
 
 ### Production Readiness
-- [ ] Managed PostgreSQL instance provisioned (AWS RDS, etc.)
-- [ ] SSL/TLS enabled (`sslmode=require`)
-- [ ] Connection pooling configured (Prisma Accelerate or PgBouncer)
-- [ ] Automated backups enabled (7+ day retention)
-- [ ] Point-in-time recovery enabled
+- [ ] Neon database provisioned (us-east-1 region)
+- [ ] SSL/TLS enabled (`sslmode=require` - automatic with Neon)
+- [ ] Connection pooling via Neon pooler endpoint
+- [ ] Automated backups enabled (included with Neon)
+- [ ] Point-in-time recovery enabled (included with Neon)
 - [ ] Monitoring and alerting configured
 - [ ] Migration deployment pipeline tested
 - [ ] Performance baselines established

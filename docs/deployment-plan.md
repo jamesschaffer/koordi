@@ -1,8 +1,8 @@
 # Koordie Production Deployment Plan
-## Google Cloud Run + Cloud SQL + Redis
+## Google Cloud Run + Neon + Redis
 
-**Last Updated:** November 23, 2024
-**Target Platform:** Google Cloud Platform
+**Last Updated:** January 28, 2025
+**Target Platform:** Google Cloud Platform + Neon
 **Application:** Koordie - Family Scheduling Assistant
 
 ---
@@ -13,23 +13,28 @@
 ┌─────────────────────────────────────────────────────────────────┐
 │                       GOOGLE CLOUD                              │
 │                                                                 │
-│   ┌──────────┐      ┌──────────┐      ┌─────────┐  ┌────────┐ │
-│   │  Cloud   │      │  Cloud   │      │ Cloud   │  │ Memory │ │
-│   │   Run    │ ───▶ │   Run    │ ───▶ │  SQL    │  │ Store  │ │
-│   │(Frontend)│      │(Backend) │      │(Postgres)  │(Redis) │ │
-│   └──────────┘      └──────────┘      └─────────┘  └────────┘ │
-│        ▲                                                        │
-│        │                                                        │
-└────────│────────────────────────────────────────────────────────┘
-         │
-    Users visit
-   koordie.com
+│   ┌──────────┐      ┌──────────┐                   ┌────────┐ │
+│   │  Cloud   │      │  Cloud   │                   │ Memory │ │
+│   │   Run    │ ───▶ │   Run    │ ──────────────▶  │ Store  │ │
+│   │(Frontend)│      │(Backend) │                   │(Redis) │ │
+│   └──────────┘      └──────────┘                   └────────┘ │
+│        ▲                  │                                     │
+│        │                  │                                     │
+└────────│──────────────────│─────────────────────────────────────┘
+         │                  │
+    Users visit             │
+   koordie.com              ▼
+                    ┌─────────────┐
+                    │    Neon     │
+                    │ (Postgres)  │
+                    │ us-east-1   │
+                    └─────────────┘
 ```
 
 **Tech Stack:**
 - **Frontend:** React + Vite + TypeScript
 - **Backend:** Node.js + Express + TypeScript + Prisma
-- **Database:** PostgreSQL (Cloud SQL)
+- **Database:** PostgreSQL (Neon - serverless, us-east-1)
 - **Cache:** Redis (Memory Store)
 - **Auth:** Google OAuth
 - **APIs:** Google Maps, Google Calendar
@@ -306,53 +311,55 @@ gcloud config set compute/zone us-central1-a
 
 ---
 
-## Phase 3: Database Setup (Cloud SQL)
+## Phase 3: Database Setup (Neon)
 
-### 3.1 Create PostgreSQL Instance
+**Note:** Production database has been migrated from Google Cloud SQL to Neon (serverless PostgreSQL).
 
-```bash
-gcloud sql instances create koordie-db \
-    --database-version=POSTGRES_15 \
-    --tier=db-f1-micro \
-    --region=us-central1 \
-    --root-password=REPLACE_WITH_STRONG_PASSWORD \
-    --backup-start-time=03:00 \
-    --storage-size=10GB \
-    --storage-auto-increase
+### 3.1 Create Neon Account and Database
+
+1. Go to [https://neon.tech](https://neon.tech) and sign up
+2. Create a new project called "koordie-prod"
+3. Select region: **us-east-1** (AWS)
+4. Note the connection details provided
+
+### 3.2 Get Connection Strings
+
+Neon provides two connection strings:
+
+**Pooler endpoint (for application connections):**
+```
+postgresql://neondb_owner:<password>@ep-royal-brook-adx8hxis-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require
 ```
 
-**⏱️ This takes 10-15 minutes.** Save the root password securely.
-
-### 3.2 Create Database
-
-```bash
-gcloud sql databases create koordie --instance=koordie-db
+**Direct endpoint (also works for migrations):**
+```
+postgresql://neondb_owner:<password>@ep-royal-brook-adx8hxis.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require
 ```
 
-### 3.3 Create Application Database User
+**Note:** Use the pooler endpoint for both application connections and migrations. Neon handles connection pooling automatically.
 
-```bash
-gcloud sql users create koordie_app \
-    --instance=koordie-db \
-    --password=REPLACE_WITH_STRONG_APP_PASSWORD
-```
+### 3.3 Database Configuration
 
-**Save this password!** You'll need it for DATABASE_URL.
+The Neon database is already configured with:
+- PostgreSQL 15+
+- Automatic connection pooling via pooler endpoint
+- SSL/TLS encryption (sslmode=require)
+- Automatic backups and point-in-time recovery
+- Serverless scaling (scales to zero when inactive)
 
-### 3.4 Get Connection Name
+### 3.4 Save Connection Details
 
-```bash
-# Get the Cloud SQL connection name
-gcloud sql instances describe koordie-db --format="value(connectionName)"
-```
+Save the pooler connection string - you'll need it for:
+- `DATABASE_URL` environment variable
+- Secret Manager configuration
+- Migration commands
 
-**Save this output!** It looks like: `koordie-prod:us-central1:koordie-db`
-
-### 3.5 Enable Cloud SQL Admin API
-
-```bash
-gcloud services enable sqladmin.googleapis.com
-```
+**Why Neon instead of Cloud SQL:**
+- Lower cost for low-traffic applications
+- Serverless scaling (pay for what you use)
+- Built-in connection pooling
+- Faster cold starts
+- Generous free tier
 
 ---
 
@@ -422,10 +429,10 @@ openssl rand -base64 32
 
 ### 6.2 Create DATABASE_URL Secret
 
-Replace the placeholders with your actual values:
+Replace the placeholders with your actual Neon connection string:
 
 ```bash
-echo -n "postgresql://koordie_app:YOUR_APP_PASSWORD@localhost/koordie?host=/cloudsql/YOUR_CONNECTION_NAME" | \
+echo -n "postgresql://neondb_owner:YOUR_PASSWORD@ep-royal-brook-adx8hxis-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require" | \
     gcloud secrets create DATABASE_URL --data-file=-
 ```
 
@@ -473,7 +480,7 @@ docker push us-central1-docker.pkg.dev/koordie-prod/koordie-repo/backend:v1
 
 ### 7.2 Deploy Backend to Cloud Run
 
-Replace `YOUR_CONNECTION_NAME` with the connection name from Phase 3.4:
+**Note:** Since we're using Neon (external database), we don't need Cloud SQL instances. The VPC connector is still needed for Redis.
 
 ```bash
 gcloud run deploy koordie-backend \
@@ -481,7 +488,6 @@ gcloud run deploy koordie-backend \
     --platform=managed \
     --region=us-central1 \
     --allow-unauthenticated \
-    --add-cloudsql-instances=YOUR_CONNECTION_NAME \
     --vpc-connector=koordie-connector \
     --set-secrets=DATABASE_URL=DATABASE_URL:latest,JWT_SECRET=JWT_SECRET:latest,ENCRYPTION_KEY=ENCRYPTION_KEY:latest,REDIS_URL=REDIS_URL:latest,GOOGLE_CLIENT_ID=GOOGLE_CLIENT_ID:latest,GOOGLE_CLIENT_SECRET=GOOGLE_CLIENT_SECRET:latest,GOOGLE_MAPS_API_KEY=GOOGLE_MAPS_API_KEY:latest \
     --set-env-vars=NODE_ENV=production,PORT=8080,FRONTEND_URL=https://koordie.com,GOOGLE_REDIRECT_URI=https://api.koordie.com/api/auth/google/callback \
@@ -495,22 +501,19 @@ gcloud run deploy koordie-backend \
 
 ### 7.3 Run Database Migrations
 
-You need to run Prisma migrations on the production database. Connect via Cloud SQL Proxy:
+With Neon, you can run migrations directly using the pooler connection string (no proxy needed):
 
 ```bash
-# Download Cloud SQL Proxy
-curl -o cloud-sql-proxy https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.8.0/cloud-sql-proxy.darwin.amd64
-
-# Make it executable
-chmod +x cloud-sql-proxy
-
-# Start proxy (replace with your connection name)
-./cloud-sql-proxy YOUR_CONNECTION_NAME
-
-# In a new terminal, navigate to backend and run migrations
 cd backend
-DATABASE_URL="postgresql://koordie_app:YOUR_APP_PASSWORD@localhost:5432/koordie" npx prisma migrate deploy
+
+# Set your Neon connection string
+export DATABASE_URL="postgresql://neondb_owner:YOUR_PASSWORD@ep-royal-brook-adx8hxis-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require"
+
+# Run migrations
+npx prisma migrate deploy
 ```
+
+**Note:** Neon's pooler endpoint works well for migrations. No Cloud SQL Proxy is needed.
 
 ### 7.4 Test Backend
 
@@ -899,11 +902,13 @@ gcloud run services logs read koordie-backend --region=us-central1 --limit=100
 ### Database Connection Issues
 
 ```bash
-# Verify Cloud SQL connection name
-gcloud sql instances describe koordie-db --format="value(connectionName)"
+# For Neon database, verify connection by testing locally:
+psql "postgresql://neondb_owner:YOUR_PASSWORD@ep-royal-brook-adx8hxis-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require"
 
-# Check that backend has --add-cloudsql-instances flag
-# Verify DATABASE_URL secret has correct format
+# Common Neon issues:
+# - Ensure sslmode=require is in the connection string
+# - Use the pooler endpoint (has "-pooler" in hostname)
+# - Check Neon dashboard for connection limits
 ```
 
 ### Redis Connection Issues
@@ -940,11 +945,10 @@ gcloud run services update koordie-backend \
     --image=us-central1-docker.pkg.dev/koordie-prod/koordie-repo/backend:latest \
     --region=us-central1
 
-# View database instances
-gcloud sql instances list
+# Connect to Neon database directly
+psql "postgresql://neondb_owner:YOUR_PASSWORD@ep-royal-brook-adx8hxis-pooler.c-2.us-east-1.aws.neon.tech/neondb?sslmode=require"
 
-# Connect to database
-gcloud sql connect koordie-db --user=koordie_app --database=koordie
+# Or use Neon's web SQL editor at https://console.neon.tech
 
 # View secrets
 gcloud secrets list
@@ -971,8 +975,8 @@ Use this when you're ready to deploy:
 - [ ] Google Cloud project created
 - [ ] Billing account linked
 - [ ] APIs enabled
-- [ ] Cloud SQL instance created
-- [ ] Redis instance created
+- [ ] Neon database created (us-east-1)
+- [ ] Redis instance created (Memory Store)
 - [ ] VPC connector created
 - [ ] Artifact Registry created
 
@@ -1024,15 +1028,21 @@ Based on <1000 daily active users:
 |---------|------|----------------|
 | Cloud Run (Backend) | 1 min instance, 512Mi | $8-15 |
 | Cloud Run (Frontend) | 1 min instance, 256Mi | $4-8 |
-| Cloud SQL (PostgreSQL) | db-f1-micro | $7 |
+| Neon (PostgreSQL) | Free tier / Pro | $0-19 |
 | Redis (Memory Store) | Basic, 1GB | $10 |
 | Artifact Registry | Storage | $1 |
-| **Total** | | **$30-41/month** |
+| **Total** | | **$19-53/month** |
 
 **Free tier benefits:**
 - Cloud Run: First 2 million requests/month free
+- Neon: 0.5 GB storage, 191 compute hours/month free
 - Cloud Storage: 5GB free
 - Networking: 1GB egress free per month
+
+**Why Neon:**
+- Free tier is generous for development and low-traffic production
+- Serverless scaling means you only pay for actual usage
+- No idle costs when database is not being queried
 
 ---
 
@@ -1045,6 +1055,6 @@ Based on <1000 daily active users:
 
 ---
 
-**Document Version:** 1.0
-**Last Reviewed:** November 23, 2024
-**Next Review:** After first successful deployment
+**Document Version:** 1.1
+**Last Reviewed:** January 28, 2025
+**Changes:** Migrated from Cloud SQL to Neon for production database

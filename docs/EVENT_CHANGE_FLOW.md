@@ -240,13 +240,67 @@ Jennifer (assigned):
 
 ---
 
+## EVENT CANCELLED IN ICS
+
+### Detection
+
+**Trigger:** Event in ICS feed has `STATUS:CANCELLED` property OR title has `[CANCELED]`/`[CANCELLED]` prefix
+
+**Reason:** Activity coordinator marked event as cancelled (but didn't remove it from feed)
+
+**System Actions:**
+1. Detect cancellation via:
+   - Standard iCalendar `STATUS:CANCELLED` property
+   - TeamSnap-style `[CANCELED]` or `[CANCELLED]` prefix in title
+2. Update event in database:
+   - Set `is_cancelled = true`
+   - Set `assigned_to_user_id = null` (unassign)
+   - Strip `[CANCELED]` prefix from title for clean display
+3. Delete all supplemental events (drive times) from database
+4. Delete main event from ALL members' Google Calendars
+5. Send WebSocket updates
+
+**User Experience:**
+
+**All Members:**
+- Event removed from Google Calendar
+- Event shows in app with grey "Cancelled" badge
+- Assignment dropdown disabled
+- Event excluded from conflict detection
+
+**Previously Assigned Parent:**
+- Supplemental events (drive times) deleted automatically
+- Event appears cancelled in app
+
+**Example:**
+```
+League cancels game due to weather
+↓
+ICS feed shows: [CANCELED] Soccer Game vs Eagles
+ - or -
+ICS feed shows: STATUS:CANCELLED
+↓
+Next sync detects cancellation
+↓
+Event removed from Google Calendars
+Event shows "Cancelled" badge in app
+```
+
+**Un-Cancellation:**
+If an event is later un-cancelled (status changes back):
+1. Set `is_cancelled = false`
+2. Event becomes assignable again
+3. Event can be re-synced to Google Calendar when assigned
+
+---
+
 ## EVENT DELETED FROM ICS
 
 ### Detection
 
 **Trigger:** Event present in database but missing from ICS feed (matched by UID)
 
-**Reason:** Activity coordinator canceled event and removed from calendar
+**Reason:** Activity coordinator removed event entirely from calendar
 
 **System Actions:**
 1. Detect event deletion
@@ -491,6 +545,7 @@ All without losing her place
 
 **Cleared When:**
 - Event deleted from ICS (no event to assign)
+- Event cancelled in ICS (automatically unassigned)
 - Event Calendar deleted (all events removed)
 - Parent member removed from Event Calendar
 
@@ -498,6 +553,20 @@ All without losing her place
 - Event details change
 - Event time changes significantly
 - Event location changes
+
+---
+
+### When Event Is Cancelled
+
+**Cancellation Clears Assignment:**
+- `is_cancelled = true` automatically sets `assigned_to_user_id = null`
+- Supplemental events deleted
+- Event removed from Google Calendars
+
+**Un-Cancellation Does NOT Restore Assignment:**
+- When `is_cancelled` changes back to `false`, the event becomes unassigned
+- Parent must re-assign themselves to the event
+- This is intentional - parents should confirm they can still attend
 
 ---
 
@@ -698,8 +767,9 @@ The following are architectural and technical implementation questions that need
 2. ✅ New events created automatically (unassigned)
 3. ✅ Event updates applied automatically
 4. ✅ Deleted events removed from all calendars
-5. ✅ Changes reflected in real-time via WebSocket
-6. ✅ No user intervention required
+5. ✅ Cancelled events detected and handled (STATUS:CANCELLED or [CANCELED] prefix)
+6. ✅ Changes reflected in real-time via WebSocket
+7. ✅ No user intervention required
 
 **Event Updates:**
 7. ✅ Time changes update supplemental events

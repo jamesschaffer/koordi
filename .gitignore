@@ -31,3 +31,9 @@ build/
 # Secrets
 github-actions-key.json
 *.key.json
+
+# Production environment files (should use CI/CD secrets instead)
+frontend/.env.production
+
+# Rollback scripts with credentials
+scripts/ROLLBACK.md

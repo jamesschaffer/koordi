@@ -67,6 +67,8 @@
 | **Event reassigned** | Update title, delete supplemental events from previous assignee, create for new assignee |
 | **Event unassigned** | Update title to "❓ Unassigned - [Title]", delete supplemental events |
 | **Event marked "Not Attending"** | Update title to "🚫 Not Attending - [Title]", delete supplemental events |
+| **Event cancelled in ICS** | Delete from all members' Google Calendars, delete supplemental events, unassign |
+| **Event un-cancelled in ICS** | Event can be re-synced when assigned (not automatically restored) |
 | **ICS feed event updated** | Update events in all members' calendars who have sync enabled |
 | **Event deleted from ICS** | Delete from all members' calendars via `UserGoogleEventSync` tracking |
 | **Member joins calendar** | Sync all existing events to their Google Calendar (on next ICS sync) |
@@ -276,6 +278,7 @@ PUT https://www.googleapis.com/calendar/v3/calendars/{calendarId}/events/{eventI
 - Assigned: `[FirstName] handling - [Event Title]` (e.g., "John handling - Soccer Practice")
 - Unassigned: `❓ Unassigned - [Event Title]`
 - Not Attending: `🚫 Not Attending - [Event Title]`
+- Cancelled: Event is **deleted** from Google Calendar (not shown with a special title)
 
 **Request Body:**
 ```json
@@ -1005,6 +1008,7 @@ describe('Google Calendar Integration', () => {
 - [x] Multi-user sync (`syncMainEventToAllMembers`)
 - [x] Supplemental events (drive times, buffer) synced
 - [x] Fixed color codes (Blue=9 for main, Yellow=5 for buffer, Gray=8 for drive)
+- [x] Cancelled event handling (delete from all calendars when `is_cancelled = true`)
 - [ ] Timezone handling (currently hardcoded to `America/Los_Angeles`)
 
 ### Error Handling
